@@ -1,0 +1,35 @@
+<?php
+
+namespace App\Http\Requests\Department;
+
+use Illuminate\Foundation\Http\FormRequest;
+
+class StoreDepartmentRequest extends FormRequest
+{
+    /**
+     * Determine if the user is authorized to make this request.
+     *
+     * Authorization is handled by the DepartmentPolicy via the controller.
+     */
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /**
+     * Get the validation rules that apply to the request.
+     *
+     * @return array<string, \Illuminate\Contracts\Validation\ValidationRule|array<mixed>|string>
+     */
+    public function rules(): array
+    {
+        return [
+            'company_id' => ['nullable', 'integer', 'exists:companies,id'],
+            'name' => ['required', 'string', 'max:255'],
+            'code' => ['nullable', 'string', 'max:50'],
+            'description' => ['nullable', 'string', 'max:1000'],
+            'color' => ['nullable', 'string', 'regex:/^#([A-Fa-f0-9]{6})$/'],
+            'status' => ['nullable', 'string', 'in:active,inactive'],
+        ];
+    }
+}

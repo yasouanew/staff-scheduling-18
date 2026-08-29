@@ -1,0 +1,261 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/forms";
+
+/* ----------------------------------------------------
+   Class-based Dark Mode Variant (enables `dark:` utilities
+   and scopes the design-token overrides below).
+   ---------------------------------------------------- */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+   /* ----------------------------------------------------
+     1. Typography & System Fonts
+     ---------------------------------------------------- */
+   --font-sans: "Inter", "Geist", system-ui, -apple-system, sans-serif;
+
+   /* ----------------------------------------------------
+     2. Border Radius (Premium Large Rounded Aesthetic)
+     ---------------------------------------------------- */
+   --radius-xs: 0.25rem;
+   /* 4px */
+   --radius-sm: 0.375rem;
+   /* 6px */
+   --radius-md: 0.5rem;
+   /* 8px */
+   --radius-lg: 0.75rem;
+   /* 12px */
+   --radius-xl: 1rem;
+   /* 16px */
+   --radius-2xl: 1.5rem;
+   /* 24px */
+   --radius-3xl: 2rem;
+   /* 32px */
+
+   /* ----------------------------------------------------
+     3. Shadows (Soft, Minimalist SaaS Shadows)
+     ---------------------------------------------------- */
+   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.04), 0 4px 6px -4px rgba(0, 0, 0, 0.02);
+   --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.03);
+
+   /* ----------------------------------------------------
+     4. Semantic Design Tokens — Light Mode Defaults
+        (Values map to the Tailwind palette so components can
+         use bg-primary, text-muted-foreground, border, etc.)
+     ---------------------------------------------------- */
+   --color-background: #fafafa;
+   /* neutral-50 */
+   --color-foreground: #171717;
+   /* neutral-900 */
+
+   --color-card: #ffffff;
+   --color-card-foreground: #171717;
+
+   --color-popover: #ffffff;
+   --color-popover-foreground: #171717;
+
+   /* Primary Component Palette (Stripe/Linear Inspired Blue) */
+   --color-primary: #2563eb;
+   /* blue-600 */
+   --color-primary-foreground: #ffffff;
+   --color-primary-hover: #1d4ed8;
+   /* blue-700 */
+
+   /* Secondary Neutral Tokens */
+   --color-secondary: #f5f5f5;
+   /* neutral-100 */
+   --color-secondary-foreground: #262626;
+   /* neutral-800 */
+
+   --color-muted: #f5f5f5;
+   --color-muted-foreground: #737373;
+   /* neutral-500 */
+
+   --color-accent: #eff6ff;
+   /* blue-50 */
+   --color-accent-foreground: #1d4ed8;
+   /* blue-700 */
+
+   /* Semantic Messaging Channels */
+   --color-success: #16a34a;
+   /* green-600 */
+   --color-success-foreground: #ffffff;
+
+   --color-warning: #f97316;
+   /* orange-500 */
+   --color-warning-foreground: #ffffff;
+
+   --color-danger: #dc2626;
+   /* red-600 */
+   --color-danger-foreground: #ffffff;
+   --color-destructive: var(--color-danger);
+   --color-destructive-foreground: var(--color-danger-foreground);
+
+   --color-info: #0ea5e9;
+   /* sky-500 */
+   --color-info-foreground: #ffffff;
+
+   /* shadcn-style interaction aliases */
+   --color-overlay: rgba(9, 9, 11, 0.48);
+   --color-disabled: #d4d4d4;
+   --color-disabled-foreground: #737373;
+
+   /* Inverted Marketing Surfaces
+       A high-contrast panel that stays readable in BOTH themes. Never pair
+       `bg-foreground` with `text-primary-foreground`: in dark mode both resolve
+       to near-white and the text disappears. Use bg-inverted/text-inverted-foreground. */
+   --color-inverted: #171717;
+   /* neutral-900 */
+   --color-inverted-foreground: #fafafa;
+   /* neutral-50 */
+
+   /* Structural Borders */
+   --color-border: #e5e5e5;
+   /* neutral-200 */
+   --color-input: #e5e5e5;
+   --color-ring: #3b82f6;
+   /* blue-500 */
+}
+
+/* ----------------------------------------------------
+   5. Dark Mode Token Overrides
+      Re-maps the same semantic variables for any subtree
+      rendered inside a `.dark` container.
+   ---------------------------------------------------- */
+:root {
+   color-scheme: light;
+}
+
+.dark {
+   color-scheme: dark;
+
+   /* ---- Layer 0: page canvas ----------------------------------
+       Deep slate/charcoal instead of pure black. Pure #000 beside
+       bright text causes halation (visual smearing) and eye strain;
+       a slate base keeps contrast high while staying comfortable. */
+   --color-background: #0f172a;
+   /* slate-900 */
+   --color-foreground: #f8fafc;
+   /* slate-50 — crisp, not pure white */
+
+   /* ---- Layer 1: cards, sidebar, tables, popovers -------------
+       One step lighter than the canvas so panels read as elevated
+       surfaces without needing heavy borders or shadows. */
+   --color-card: #1e293b;
+   /* slate-800 */
+   --color-card-foreground: #f8fafc;
+
+   --color-popover: #1e293b;
+   --color-popover-foreground: #f8fafc;
+
+   --color-primary: #3b82f6;
+   /* blue-500 */
+   --color-primary-foreground: #ffffff;
+   --color-primary-hover: #60a5fa;
+   /* blue-400 */
+
+   /* ---- Layer 2: interactive hover surfaces -------------------
+       Must stay lighter than --color-card, otherwise hover states
+       on cards, tables and the sidebar become invisible. */
+   --color-secondary: #334155;
+   /* slate-700 */
+   --color-secondary-foreground: #f1f5f9;
+   /* slate-100 */
+
+   /* Sits between slate-800 and slate-700 so skeletons and subtle
+       panels stay visible on BOTH the canvas and the card layer. */
+   --color-muted: #293548;
+   --color-muted-foreground: #94a3b8;
+   /* slate-400 — muted meta text & subtitles */
+
+   /* Active navigation uses a blue tint rather than flat grey so the
+       current page is unmistakable at a glance. */
+   --color-accent: #1e3a8a;
+   /* blue-900 */
+   --color-accent-foreground: #bfdbfe;
+   /* blue-200 */
+
+   /* Elevated inverted panel stays visibly distinct from the canvas
+       while its text remains near-white. */
+   --color-inverted: #334155;
+   --color-inverted-foreground: #f8fafc;
+
+   /* ---- Desaturated status hues -------------------------------
+       Dark surfaces need lighter, softer hues: saturated 500/600
+       colours vibrate against slate and fail contrast as text.
+       These 400-level tones read cleanly both as plain text and as
+       soft 10%-opacity badge fills. Because the hues are now light,
+       each paired `-foreground` flips to a deep tint so SOLID fills
+       stay legible (e.g. dark red text on a light red button). */
+   --color-success: #4ade80;
+   /* green-400 */
+   --color-success-foreground: #052e16;
+   /* green-950 */
+
+   --color-warning: #fbbf24;
+   /* amber-400 */
+   --color-warning-foreground: #451a03;
+   /* amber-950 */
+
+   --color-danger: #f87171;
+   /* red-400 */
+   --color-danger-foreground: #450a0a;
+   /* red-950 */
+
+   --color-info: #38bdf8;
+   /* sky-400 */
+   --color-info-foreground: #082f49;
+   /* sky-950 */
+
+   --color-border: #334155;
+   /* slate-700 */
+   --color-input: #334155;
+   --color-ring: #60a5fa;
+   /* blue-400 */
+   --color-overlay: rgba(2, 6, 23, 0.72);
+   /* slate-950 @ 72% */
+   --color-disabled: #334155;
+   --color-disabled-foreground: #64748b;
+   /* slate-500 */
+}
+
+/* ----------------------------------------------------
+   6. Global Base Application Resets & Elements
+   ---------------------------------------------------- */
+@layer base {
+   * {
+      border-color: var(--color-border);
+   }
+
+   html {
+      min-height: 100%;
+      background-color: var(--color-background);
+   }
+
+   body {
+      min-height: 100vh;
+      background-color: var(--color-background);
+      color: var(--color-foreground);
+      font-family: var(--font-sans);
+      font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+      text-rendering: optimizeLegibility;
+   }
+
+   button,
+   input,
+   select,
+   textarea {
+      font: inherit;
+   }
+
+   button:not(:disabled),
+   [role="button"]:not([aria-disabled="true"]) {
+      cursor: pointer;
+   }
+
+   ::selection {
+      background-color: color-mix(in srgb, var(--color-primary) 22%, transparent);
+      color: var(--color-foreground);
+   }
+}
