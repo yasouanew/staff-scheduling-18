@@ -141,7 +141,7 @@ class BranchCapacityTest extends TestCase
         // The company.access middleware blocks locked companies first (423).
         $this->postJson("/api/v1/branches/{$branch->id}/activate")
             ->assertStatus(423)
-            ->assertJsonPath('code', 'company_subscription_required');
+            ->assertJsonPath('code', 'SUBSCRIPTION_REQUIRED');
     }
 
     public function test_activation_is_rejected_when_branch_limit_is_reached(): void

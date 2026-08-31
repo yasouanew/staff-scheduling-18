@@ -65,12 +65,15 @@ class RoleAndPermissionSeeder extends Seeder
         $superAdmin = Role::updateOrCreate(['name' => 'super_admin', 'guard_name' => 'web']);
         $superAdmin->syncPermissions(Permission::all());
 
-        // Company Admin — all except company create/delete. The business owner
-        // manages the company's own subscription (upgrade/downgrade/cancel) via
-        // the Subscription & Billing dashboard, so `subscription.manage` stays.
+        // Company Admin — all except company create/delete/refund. The business
+        // owner manages the company's own subscription (upgrade/downgrade/cancel)
+        // via the Subscription & Billing dashboard, so `subscription.manage` stays.
+        // `subscription.refund` is SUPERADMIN-ONLY: money leaving the business is
+        // an irreversible platform-level action and must never be triggered by a
+        // tenant account.
         $companyAdmin = Role::updateOrCreate(['name' => 'company_admin', 'guard_name' => 'web']);
         $companyAdmin->syncPermissions(Permission::whereNotIn('name', [
-            'company.create', 'company.delete',
+            'company.create', 'company.delete', 'subscription.refund',
         ])->get());
 
         // Scheduler — roster, shift, employee view, leave view/approve

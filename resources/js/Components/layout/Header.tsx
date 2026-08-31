@@ -25,6 +25,8 @@ export interface HeaderUser {
     avatarUrl?: string;
     companyId?: string;
     trialEndsAt?: string | null;
+    /** Web role used to gate billing-sensitive UI such as the trial badge (§19). */
+    role?: 'super_admin' | 'company_admin' | 'scheduler' | 'employee';
 }
 
 interface HeaderProps {
@@ -41,14 +43,16 @@ function getInitials(name: string): string {
 /** Sticky shell header for breadcrumbs, trial status, notifications, theme, and profile actions. */
 export function Header({ user, onMenuClick, onSignOut }: HeaderProps): JSX.Element {
     const trialDaysRemaining = useMemo(() => {
-        if (!user.trialEndsAt) {
+        // The trial badge is billing-sensitive UI: only company admins see it (§19).
+        // Schedulers and employees never get subscription/trial affordances.
+        if (user.role !== 'company_admin' || !user.trialEndsAt) {
             return null;
         }
 
         const millisecondsRemaining = new Date(user.trialEndsAt).getTime() - Date.now();
 
         return millisecondsRemaining > 0 ? Math.ceil(millisecondsRemaining / 86_400_000) : null;
-    }, [user.trialEndsAt]);
+    }, [user.role, user.trialEndsAt]);
 
     return <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b border-border bg-card/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-card/80 sm:gap-3 sm:px-6">
         <Button variant="ghost" size="icon" onClick={onMenuClick} className="md:hidden" aria-label="Open navigation menu">
@@ -56,7 +60,7 @@ export function Header({ user, onMenuClick, onSignOut }: HeaderProps): JSX.Eleme
         </Button>
         <Breadcrumbs />
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-            {trialDaysRemaining !== null && user.companyId ? <Link to={`/companies/${user.companyId}/subscriptions`} className="hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:block">
+            {trialDaysRemaining !== null && user.companyId ? <Link to="/subscription" className="hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:block">
                 <Badge variant="primary" className="h-8 px-3 transition-colors hover:bg-primary/15">
                     <CreditCard className="h-3.5 w-3.5" aria-hidden="true" />
                     {trialDaysRemaining} {trialDaysRemaining === 1 ? 'day' : 'days'} left

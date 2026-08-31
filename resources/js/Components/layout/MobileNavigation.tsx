@@ -32,10 +32,17 @@ export function MobileNavigation({ open, onOpenChange, items }: MobileNavigation
             </DialogHeader>
             <nav aria-label="Primary navigation" className="flex-1 overflow-y-auto px-3 py-4">
                 <ul className="space-y-1">
-                    {items.map((item) => {
+                    {items.map((item, index) => {
                         const Icon = item.icon;
+                        const previous = items[index - 1];
+                        const showSection = item.section && previous?.section !== item.section;
 
                         return <li key={item.to}>
+                            {showSection ? (
+                                <p className="px-3 pb-1 pt-4 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/80 first:pt-0">
+                                    {item.section}
+                                </p>
+                            ) : null}
                             <NavLink
                                 to={item.to}
                                 end={item.end}

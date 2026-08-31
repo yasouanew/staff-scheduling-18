@@ -466,4 +466,163 @@ class BillingProviderWebhookTest extends TestCase
         ]);
         $this->assertNotNull($subscription->fresh()->cancelled_at);
     }
+
+    // ---------------------------------------------------------------------
+    // Plan reconciliation — customer.subscription.updated drives local plan /
+    // billing-cycle changes from the provider's actual price (provider is
+    // authoritative for what the customer is charged).
+    // ---------------------------------------------------------------------
+
+    public function test_subscription_updated_reconciles_an_upgrade_from_provider_price(): void
+    {
+        $current = Plan::factory()->create([
+            'stripe_monthly_price_id' => 'price_test_current_monthly',
+            'stripe_yearly_price_id' => 'price_test_current_yearly',
+        ]);
+        $target = Plan::factory()->create([
+            'stripe_monthly_price_id' => 'price_test_target_monthly',
+            'stripe_yearly_price_id' => 'price_test_target_yearly',
+        ]);
+
+        $subscription = $this->makeSubscription([
+            'plan_id' => $current->id,
+            'billing_cycle' => 'monthly',
+            'stripe_price' => 'price_test_current_monthly',
+        ]);
+
+        $event = [
+            'id' => 'evt_sub_reconcile_upgrade',
+            'type' => 'customer.subscription.updated',
+            'data' => [
+                'object' => [
+                    'id' => $subscription->stripe_id,
+                    'status' => 'active',
+                    'current_period_start' => now()->getTimestamp(),
+                    'current_period_end' => now()->addMonth()->getTimestamp(),
+                    'items' => [
+                        'data' => [
+                            ['id' => 'si_target_1', 'price' => ['id' => 'price_test_target_monthly']],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $this->postWebhook($event)->assertOk();
+
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $subscription->id,
+            'plan_id' => $target->id,
+            'billing_cycle' => 'monthly',
+            'stripe_price' => 'price_test_target_monthly',
+        ]);
+    }
+
+    public function test_subscription_updated_reconciles_a_billing_cycle_change(): void
+    {
+        $current = Plan::factory()->create([
+            'stripe_monthly_price_id' => 'price_test_cycle_monthly',
+            'stripe_yearly_price_id' => 'price_test_cycle_yearly',
+        ]);
+
+        $subscription = $this->makeSubscription([
+            'plan_id' => $current->id,
+            'billing_cycle' => 'monthly',
+            'stripe_price' => 'price_test_cycle_monthly',
+        ]);
+
+        $event = [
+            'id' => 'evt_sub_reconcile_cycle',
+            'type' => 'customer.subscription.updated',
+            'data' => [
+                'object' => [
+                    'id' => $subscription->stripe_id,
+                    'status' => 'active',
+                    'items' => [
+                        'data' => [
+                            ['id' => 'si_cycle_1', 'price' => ['id' => 'price_test_cycle_yearly']],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $this->postWebhook($event)->assertOk();
+
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $subscription->id,
+            'plan_id' => $current->id,
+            'billing_cycle' => 'yearly',
+            'stripe_price' => 'price_test_cycle_yearly',
+        ]);
+    }
+
+    public function test_subscription_updated_ignores_an_unknown_provider_price(): void
+    {
+        $current = Plan::factory()->create([
+            'stripe_monthly_price_id' => 'price_test_unknown_current',
+        ]);
+
+        $subscription = $this->makeSubscription([
+            'plan_id' => $current->id,
+            'billing_cycle' => 'monthly',
+            'stripe_price' => 'price_test_unknown_current',
+        ]);
+
+        $event = [
+            'id' => 'evt_sub_reconcile_unknown',
+            'type' => 'customer.subscription.updated',
+            'data' => [
+                'object' => [
+                    'id' => $subscription->stripe_id,
+                    'status' => 'active',
+                    'items' => [
+                        'data' => [
+                            // A retired / unknown price must never overwrite local
+                            // state — the local plan is never guessed.
+                            ['id' => 'si_unknown_1', 'price' => ['id' => 'price_retired_plan_xyz']],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $this->postWebhook($event)->assertOk();
+
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $subscription->id,
+            'plan_id' => $current->id,
+            'billing_cycle' => 'monthly',
+            'stripe_price' => 'price_test_unknown_current',
+        ]);
+    }
+
+    public function test_subscription_updated_for_unknown_subscription_is_a_safe_noop(): void
+    {
+        $event = [
+            'id' => 'evt_sub_reconcile_orphan',
+            'type' => 'customer.subscription.updated',
+            'data' => [
+                'object' => [
+                    'id' => 'sub_test_does_not_exist',
+                    'status' => 'active',
+                    'items' => [
+                        'data' => [
+                            ['id' => 'si_orphan_1', 'price' => ['id' => 'price_test_target_monthly']],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $this->postWebhook($event)
+            ->assertOk()
+            ->assertJson(['received' => true]);
+
+        $this->assertDatabaseHas('stripe_webhook_events', [
+            'event_id' => 'evt_sub_reconcile_orphan',
+            'status' => 'processed',
+        ]);
+        $this->assertSame(0, Subscription::query()->where('stripe_id', 'sub_test_does_not_exist')->count());
+    }
 }

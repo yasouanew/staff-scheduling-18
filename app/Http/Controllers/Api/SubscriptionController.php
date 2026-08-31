@@ -139,6 +139,11 @@ class SubscriptionController extends Controller
 
     /**
      * Swap the subscription to a different plan.
+     *
+     * Routes through the canonical {@see SubscriptionService::changePlan()}
+     * (the same validated decision point used by the company self-service
+     * upgrade/downgrade surface), so a downgrade can never bypass the branch /
+     * employee allowance checks.
      */
     public function swap(Request $request, Company $company, Subscription $subscription): JsonResponse
     {
@@ -151,10 +156,11 @@ class SubscriptionController extends Controller
 
         $plan = Plan::findOrFail($validated['plan_id']);
 
-        $subscription = $this->subscriptionService->swap(
+        $subscription = $this->subscriptionService->changePlan(
             $subscription,
             $plan,
-            $validated['billing_cycle'] ?? null
+            $validated['billing_cycle'] ?? null,
+            $request->user(),
         );
 
         return $this->successResponse(

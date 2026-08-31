@@ -49,6 +49,7 @@ class EnsureActiveSubscription
             return response()->json([
                 'success' => false,
                 'message' => 'An active subscription is required to access this feature.',
+                'code' => 'SUBSCRIPTION_REQUIRED',
             ], 402);
         }
 

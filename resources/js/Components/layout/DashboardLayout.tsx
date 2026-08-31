@@ -54,6 +54,7 @@ export function DashboardLayout({ user = DEFAULT_USER, onSignOut }: DashboardLay
             email: session.data.email,
             companyId: session.data.company_id ? String(session.data.company_id) : undefined,
             trialEndsAt: session.data.company_access?.trial_is_active ? session.data.company_access.trial_ends_at : null,
+            role: role ?? undefined,
         }
         : user;
 

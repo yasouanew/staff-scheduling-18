@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { toast } from 'sonner';
 
-import { getApiErrorMessage, isStaleVersionError } from '@/lib/api-client';
+import { isStaleVersionError } from '@/lib/api-client';
+import { schedulingErrorMessage } from '@/lib/scheduling-errors';
 import type { Roster, RosterChangeMutation } from '@/types/roster-management';
 
 import { useApplyRosterChanges, useRosterChangePreview, type RosterChangeSummary } from './useRosterChanges';
@@ -96,7 +97,7 @@ export function useRosterChangeSave({
                         setPreview(summary);
                     },
                     onError: (mutationError) => {
-                        setError(getApiErrorMessage(mutationError, 'Unable to preview changes.'));
+                        setError(schedulingErrorMessage(mutationError, 'Unable to preview changes.'));
                     },
                 },
             );
@@ -166,7 +167,7 @@ export function useRosterChangeSave({
                         return;
                     }
                     setError(
-                        getApiErrorMessage(mutationError, 'Unable to save roster changes.'),
+                        schedulingErrorMessage(mutationError, 'Unable to save roster changes.'),
                     );
                 },
             },

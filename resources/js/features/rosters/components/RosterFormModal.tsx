@@ -6,7 +6,7 @@ import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 
 import { LoadingSpinner } from '@/Components/common/LoadingSpinner';
-import { getApiErrorMessage } from '@/lib/api-client';
+import { schedulingErrorMessage } from '@/lib/scheduling-errors';
 import { cn } from '@/lib/utils';
 import { ROSTER_STATUS_LABELS, ROSTER_STATUSES, type Roster } from '@/types/roster-management';
 
@@ -119,7 +119,7 @@ export function RosterFormModal({
             onOpenChange(false);
         } catch (error) {
             toast.error(isEdit ? 'Unable to update roster' : 'Unable to create roster', {
-                description: getApiErrorMessage(error, 'Please review the form and try again.'),
+                description: schedulingErrorMessage(error, 'Please review the form and try again.'),
             });
         }
     });

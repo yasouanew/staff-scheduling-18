@@ -63,6 +63,18 @@ interface BillingProvider
     public function swap(User $user, Subscription $subscription, Plan $plan, string $cycle): void;
 
     /**
+     * Create a Stripe Customer Portal session for the given customer.
+     *
+     * The portal lets the customer self-serve payment-method changes, invoice
+     * history and card updates without the application ever handling raw card
+     * data. Subscription / entitlement state stays authoritative in the local
+     * application; the portal only manages the payment relationship.
+     *
+     * @return string  The hosted portal URL the company admin is redirected to.
+     */
+    public function billingPortal(User $user, ?string $returnUrl = null): string;
+
+    /**
      * Refund a previously recorded payment.
      *
      * @return array{refund_id: string, amount_refunded: float}

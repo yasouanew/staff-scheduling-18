@@ -101,9 +101,21 @@ export function Sidebar({ collapsed = false, items, className, onToggleCollapse 
             </div>
             <nav className={cn('flex-1 overflow-y-auto py-4', collapsed ? 'px-2' : 'px-3')}>
                 <ul className="space-y-1">
-                    {items.map((item) => <li key={item.to} className={collapsed ? 'flex justify-center' : undefined}>
-                        <SidebarNavLink item={item} collapsed={collapsed} />
-                    </li>)}
+                    {items.map((item, index) => {
+                        const previous = items[index - 1];
+                        const showSection = !collapsed && item.section && previous?.section !== item.section;
+
+                        return <li key={item.to}>
+                            {showSection ? (
+                                <p className="px-3 pb-1 pt-4 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground/80 first:pt-0">
+                                    {item.section}
+                                </p>
+                            ) : null}
+                            <div className={collapsed ? 'flex justify-center' : undefined}>
+                                <SidebarNavLink item={item} collapsed={collapsed} />
+                            </div>
+                        </li>;
+                    })}
                 </ul>
             </nav>
             <div className={cn('shrink-0 border-t border-border', collapsed ? 'flex justify-center px-2 py-3' : 'space-y-2 px-4 py-3')}>

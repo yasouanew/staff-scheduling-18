@@ -1,159 +1,236 @@
 /**
  * Domain types for the Super Admin platform (cross-tenant) module.
  *
- * These contracts describe tenant organizations, the subscription plan
- * catalogue, platform-level configuration and the aggregated revenue metrics
- * rendered across the Super Admin dashboard and management ledgers.
+ * These contracts describe the aggregated platform snapshot (`/dashboard/overview`
+ * for super admins) and the cross-tenant company ledger (`/companies`). The
+ * backend is the single source of truth — every value rendered here is fetched
+ * live from the API (§41), never seeded in-memory.
  */
 
-/** Lifecycle state of a tenant's subscription. */
-export type SubscriptionStatus =
-    | 'active'
-    | 'trialing'
-    | 'past_due'
-    | 'grace_period'
-    | 'suspended'
-    | 'cancelled'
-    | 'expired';
+/* -------------------------------------------------------------------------- */
+/* Status                                                                     */
+/* -------------------------------------------------------------------------- */
 
-/** Canonical platform plan tiers. */
-export type PlanTier = 'free' | 'growth' | 'enterprise';
-
-/** Overall platform operational status. */
-export type SystemHealth = 'operational' | 'degraded' | 'maintenance';
+/** Lifecycle state of a company account (mirrors `types/company`). */
+export type CompanyStatus = 'active' | 'inactive' | 'suspended';
 
 /** Semantic tones used by distribution/summary visualisations. */
 export type DistributionTone = 'primary' | 'success' | 'info' | 'warning';
 
-/** A single tenant organization on the platform. */
-export interface TenantCompany {
-    id: string;
+/* -------------------------------------------------------------------------- */
+/* Platform snapshot (mirrors `GET /dashboard/overview` for super admins)     */
+/* -------------------------------------------------------------------------- */
+
+/** Raw transport shape for a single plan-distribution row. */
+export interface PlanDistributionDto {
+    id: number;
     name: string;
-    slug: string;
-    contactEmail: string;
-    tier: PlanTier;
-    planName: string;
-    status: SubscriptionStatus;
-    /** Currently active staff scheduled by this tenant. */
-    activeStaff: number;
-    /** Contracted seat ceiling for the tenant's plan. */
-    seatLimit: number;
-    /** Monthly recurring revenue contributed by the tenant, in AUD. */
-    mrr: number;
-    /** Australian state/territory code, e.g. `NSW`. */
-    state: string;
-    createdAt: string;
-    lastActiveAt: string;
+    tenant_count: number;
 }
 
-/** A single toggleable capability within a plan. */
-export interface PlanFeature {
-    id: string;
-    label: string;
-    included: boolean;
-}
-
-/** A purchasable subscription plan tier. */
-export interface SubscriptionPlan {
-    id: string;
-    tier: PlanTier;
+/** Raw transport shape for a recently onboarded company row. */
+export interface RecentCompanyDto {
+    id: number;
     name: string;
-    description: string;
-    /** Monthly price in AUD. */
-    monthlyPrice: number;
-    /** Annual price in AUD. */
-    annualPrice: number;
-    /** Seat ceiling; `null` denotes unlimited seats. */
-    seatLimit: number | null;
-    isPublished: boolean;
-    activeTenants: number;
-    features: PlanFeature[];
+    status: string;
+    created_at: string;
 }
 
-/** Global platform configuration surfaced to super admins. */
-export interface PlatformSettings {
-    platformName: string;
-    supportEmail: string;
-    defaultTrialDays: number;
-    signupsEnabled: boolean;
-    maintenanceMode: boolean;
-    currency: 'AUD';
+/** Raw platform-scoped payload serialized by `DashboardController::platformOverview`. */
+export interface PlatformOverviewDto {
+    scope: 'platform';
+    stats: {
+        total_companies: number;
+        active_companies: number;
+        total_employees: number;
+        active_subscriptions: number;
+    };
+    plan_distribution: PlanDistributionDto[];
+    recent_companies: RecentCompanyDto[];
 }
 
-/** One month on the revenue trend line. */
-export interface RevenuePoint {
-    /** ISO date for the first of the month. */
-    month: string;
-    /** Short month label, e.g. `Jan`. */
-    label: string;
-    /** Monthly recurring revenue for the month, in AUD. */
-    mrr: number;
-    /** Annualised run-rate for the month, in AUD. */
-    arr: number;
+/** Aggregated platform counters rendered across the dashboard ribbon. */
+export interface PlatformStats {
+    totalCompanies: number;
+    activeCompanies: number;
+    totalEmployees: number;
+    activeSubscriptions: number;
 }
 
-/** Share of tenants attributed to a single plan tier. */
+/** Share of tenants attributed to a single plan. */
 export interface PlanDistributionSlice {
-    tier: PlanTier;
+    id: string;
     planName: string;
     tenantCount: number;
     sharePct: number;
     tone: DistributionTone;
 }
 
-/** Aggregated revenue figures for the platform. */
-export interface RevenueMetrics {
-    /** Combined monthly recurring revenue, in AUD. */
-    mrr: number;
-    /** Annual recurring revenue (run-rate), in AUD. */
-    arr: number;
-    /** Month-over-month MRR growth as a percentage. */
-    growthRatePct: number;
-    trend: RevenuePoint[];
-}
-
 /** The platform master snapshot rendered on the Super Admin dashboard. */
 export interface PlatformMetrics {
-    revenue: RevenueMetrics;
+    stats: PlatformStats;
     totalTenants: number;
     activeTenants: number;
     suspendedTenants: number;
-    /** Combined employees scheduled across every tenant. */
+    /** Combined employees across every tenant. */
     employeesScheduled: number;
-    systemHealth: SystemHealth;
     planDistribution: PlanDistributionSlice[];
+    /** Most recently created companies (from the platform overview). */
+    recentCompanies: RecentCompanyDto[];
+    /** Real MRR/ARR/Revenue/Churn aggregates (backend-derived). */
+    billing?: PlatformBillingMetrics;
 }
 
 /* -------------------------------------------------------------------------- */
-/* Mutation input contracts (consumed by the data-mutation hooks)             */
+/* Platform billing metrics (MRR / ARR / Revenue / Churn)                     */
 /* -------------------------------------------------------------------------- */
 
-/** Payload to suspend or reactivate a tenant. */
-export interface SetTenantStatusInput {
-    tenantId: string;
-    status: SubscriptionStatus;
+/** Churn breakdown returned by the platform metrics endpoint. */
+export interface ChurnBreakdown {
+    churned_count: number;
+    active_base: number;
+    rate: number;
 }
 
-/** Payload to change a plan's pricing. */
-export interface UpdatePlanPricingInput {
+/** Raw payload of `GET /super-admin/metrics`. */
+export interface PlatformMetricsDto {
+    scope: 'platform';
+    metrics: {
+        mrr: number;
+        arr: number;
+        revenue: number;
+        churn: ChurnBreakdown;
+    };
+}
+
+/** Normalised MRR/ARR/Revenue/Churn metrics for the dashboard ribbon. */
+export interface PlatformBillingMetrics {
+    mrr: number;
+    arr: number;
+    revenue: number;
+    churnRate: number;
+    churnedCount: number;
+    churnActiveBase: number;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Global subscriptions (GET /super-admin/subscriptions)                      */
+/* -------------------------------------------------------------------------- */
+
+/** Raw subscription row as serialized by the super-admin endpoint. */
+export interface PlatformSubscriptionDto {
+    id: number;
+    company_id: number;
+    user_id: number | null;
+    plan_id: number;
+    stripe_id: string | null;
+    stripe_status: string | null;
+    stripe_price: string | null;
+    quantity: number | null;
+    status: string;
+    billing_cycle: 'monthly' | 'six_month' | 'yearly' | string;
+    on_trial: boolean;
+    is_active: boolean;
+    is_cancelled: boolean;
+    starts_at: string | null;
+    ends_at: string | null;
+    trial_ends_at: string | null;
+    cancelled_at: string | null;
+    company: { id: number; name: string; status: string } | null;
+    plan: { id: number; name: string; slug: string } | null;
+    plan_name: string | null;
+    active_branches_count: number;
+    created_at: string | null;
+    updated_at: string | null;
+}
+
+/** Normalised global subscription row for the platform Subscriptions page. */
+export interface PlatformSubscription {
+    id: string;
+    companyId: string;
+    companyName: string;
+    companyStatus: string;
     planId: string;
-    monthlyPrice: number;
-    annualPrice: number;
+    planName: string;
+    status: string;
+    billingCycle: string;
+    onTrial: boolean;
+    isActive: boolean;
+    isCancelled: boolean;
+    startsAt: string | null;
+    endsAt: string | null;
+    trialEndsAt: string | null;
+    cancelledAt: string | null;
+    activeBranchesCount: number;
+    createdAt: string | null;
 }
 
-/** Payload to include or restrict a plan feature. */
-export interface TogglePlanFeatureInput {
-    planId: string;
-    featureId: string;
-    included: boolean;
+/* -------------------------------------------------------------------------- */
+/* Global payments (GET /super-admin/payments)                                */
+/* -------------------------------------------------------------------------- */
+
+/** Raw payment row as serialized by the super-admin endpoint. */
+export interface PlatformPaymentDto {
+    id: number;
+    subscription_id: number;
+    amount: number | string;
+    amount_refunded: number | string;
+    currency: string;
+    payment_provider: string;
+    provider_reference: string | null;
+    status: string;
+    is_refundable: boolean;
+    is_refunded: boolean;
+    paid_at: string | null;
+    refunded_at: string | null;
+    company: { id: number; name: string; status: string } | null;
+    plan: { id: number; name: string } | null;
+    created_at: string | null;
 }
 
-/** Payload to create a new plan tier. */
-export interface CreatePlanInput {
-    name: string;
-    tier: PlanTier;
+/** Normalised global payment row for the platform Payments page. */
+export interface PlatformPayment {
+    id: string;
+    subscriptionId: string;
+    amount: number;
+    amountRefunded: number;
+    currency: string;
+    provider: string;
+    reference: string | null;
+    status: string;
+    isRefundable: boolean;
+    isRefunded: boolean;
+    paidAt: string | null;
+    refundedAt: string | null;
+    companyName: string;
+    companyStatus: string;
+    planName: string | null;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Platform audit log (GET /super-admin/audit)                                */
+/* -------------------------------------------------------------------------- */
+
+/** Raw audit row as serialized by the super-admin endpoint. */
+export interface PlatformAuditDto {
+    id: number;
+    log_name: string | null;
+    event: string | null;
+    description: string | null;
+    properties: Record<string, unknown> | null;
+    causer: { id: number; name: string; email: string } | null;
+    subject: { type: string; id: number | string } | null;
+    company: { id: number; name: string } | null;
+    created_at: string | null;
+}
+
+/** Normalised audit row for the platform Audit page. */
+export interface PlatformAuditEvent {
+    id: string;
+    event: string;
     description: string;
-    monthlyPrice: number;
-    annualPrice: number;
-    seatLimit: number | null;
+    causerName: string | null;
+    subjectType: string | null;
+    companyName: string | null;
+    createdAt: string | null;
 }

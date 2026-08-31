@@ -13,7 +13,7 @@ import { toast } from 'sonner';
 
 import { StatCard } from '@/Components/common/StatCard';
 import { useBranches } from '@/features/branches/hooks/useBranches';
-import { getApiErrorMessage } from '@/lib/api-client';
+import { schedulingErrorMessage } from '@/lib/scheduling-errors';
 import { cn } from '@/lib/utils';
 import {
     ROSTER_STATUS_LABELS,
@@ -99,7 +99,7 @@ export function RostersListPage(): JSX.Element {
                 }),
             onError: (error) =>
                 toast.error('Unable to delete roster', {
-                    description: getApiErrorMessage(error, 'Please try again.'),
+                    description: schedulingErrorMessage(error, 'Please try again.'),
                 }),
         });
     };
@@ -114,7 +114,7 @@ export function RostersListPage(): JSX.Element {
                 }),
             onError: (error) =>
                 toast.error('Unable to publish roster', {
-                    description: getApiErrorMessage(error, 'Please try again.'),
+                    description: schedulingErrorMessage(error, 'Please try again.'),
                 }),
         });
     };

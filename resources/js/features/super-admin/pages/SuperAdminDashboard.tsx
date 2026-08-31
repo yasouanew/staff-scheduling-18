@@ -1,52 +1,33 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { format, parseISO } from 'date-fns';
 import {
     AlertTriangle,
     Building2,
-    DollarSign,
-    ShieldCheck,
-    TrendingDown,
+    CalendarCheck2,
+    CreditCard,
     TrendingUp,
     Users,
+    Wallet,
 } from 'lucide-react';
-import {
-    Area,
-    AreaChart,
-    CartesianGrid,
-    ResponsiveContainer,
-    Tooltip,
-    XAxis,
-    YAxis,
-} from 'recharts';
+import { useMemo } from 'react';
 
 import { EmptyState } from '@/Components/common/EmptyState';
 import { ErrorBoundary } from '@/Components/common/ErrorBoundary';
 import { LoadingSkeleton } from '@/Components/common/LoadingSkeleton';
-import { StatCard, type StatCardTone } from '@/Components/common/StatCard';
-import { formatAud } from '@/lib/chart';
+import { StatCard } from '@/Components/common/StatCard';
 import { cn } from '@/lib/utils';
 import type {
     DistributionTone,
     PlanDistributionSlice,
-    RevenuePoint,
-    SystemHealth,
+    RecentCompanyDto,
 } from '@/types/super-admin';
 
-import { usePlatformMetrics } from '../hooks/useSuperAdmin';
+import { usePlatformBillingMetrics, usePlatformMetrics } from '../hooks/useSuperAdmin';
 
 /** Dedicated client so the platform dashboard works standalone. */
 const queryClient = new QueryClient({
     defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
 });
-
-/** Fixed chart height keeps the revenue panel visually balanced. */
-const CHART_HEIGHT = 288;
-
-/** Presentational label + tone treatment per system-health state. */
-const HEALTH_META: Record<SystemHealth, { label: string; tone: StatCardTone }> = {
-    operational: { label: 'Operational', tone: 'success' },
-    degraded: { label: 'Degraded', tone: 'warning' },
-    maintenance: { label: 'Maintenance', tone: 'info' },
-};
 
 /** Semantic bar/text token pairs for the plan distribution rows. */
 const TONE_BAR: Record<DistributionTone, string> = {
@@ -56,75 +37,43 @@ const TONE_BAR: Record<DistributionTone, string> = {
     warning: 'bg-warning',
 };
 
-/** Compact AUD axis formatter (e.g. `$12k`). */
-function formatAudAxis(value: number): string {
-    if (Math.abs(value) >= 1000) {
-        return `$${Math.round(value / 1000)}k`;
+/** Formats an amount as AUD currency. */
+function formatMoney(value: number | undefined): string {
+    if (value === undefined || Number.isNaN(value)) return '—';
+    return new Intl.NumberFormat('en-AU', {
+        style: 'currency',
+        currency: 'AUD',
+        maximumFractionDigits: 0,
+    }).format(value);
+}
+
+/** Formats a churn rate (fraction) as a percentage. */
+function formatPercent(value: number | undefined): string {
+    if (value === undefined || Number.isNaN(value)) return '—';
+    return `${(value * 100).toFixed(1)}%`;
+}
+
+/** Company status pill tone helper. */
+function statusTone(status: string): string {
+    switch (status) {
+        case 'active':
+            return 'bg-success/10 text-success';
+        case 'suspended':
+            return 'bg-danger/10 text-danger';
+        default:
+            return 'bg-muted text-muted-foreground';
     }
-    return `$${value}`;
 }
 
-/** Tooltip payload shape injected by Recharts for the revenue area. */
-interface RevenueTooltipProps {
-    active?: boolean;
-    payload?: ReadonlyArray<{ payload: RevenuePoint }>;
-}
-
-/** Custom AUD tooltip surfacing MRR and annualised run-rate. */
-function RevenueTooltip({ active, payload }: RevenueTooltipProps): JSX.Element | null {
-    if (!active || !payload || payload.length === 0) {
-        return null;
+function statusLabel(status: string): string {
+    switch (status) {
+        case 'active':
+            return 'Active';
+        case 'suspended':
+            return 'Suspended';
+        default:
+            return 'Inactive';
     }
-    const point = payload[0].payload;
-    return (
-        <div className="rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-lg">
-            <p className="mb-1 font-semibold text-popover-foreground">{point.label}</p>
-            <p className="text-muted-foreground">
-                MRR <span className="font-medium text-foreground">{formatAud(point.mrr)}</span>
-            </p>
-            <p className="text-muted-foreground">
-                ARR <span className="font-medium text-foreground">{formatAud(point.arr)}</span>
-            </p>
-        </div>
-    );
-}
-
-/** Presentational recurring-revenue trend chart (props only, no fetching). */
-function PlatformRevenueChart({ data }: { data: RevenuePoint[] }): JSX.Element {
-    return (
-        <ResponsiveContainer width="100%" height={CHART_HEIGHT}>
-            <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: 8 }}>
-                <defs>
-                    <linearGradient id="platform-mrr" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.35} />
-                        <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0.02} />
-                    </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-                <XAxis
-                    dataKey="label"
-                    tickLine={false}
-                    axisLine={false}
-                    tick={{ fill: 'var(--color-muted-foreground)', fontSize: 12 }}
-                />
-                <YAxis
-                    tickLine={false}
-                    axisLine={false}
-                    width={48}
-                    tick={{ fill: 'var(--color-muted-foreground)', fontSize: 12 }}
-                    tickFormatter={formatAudAxis}
-                />
-                <Tooltip content={<RevenueTooltip />} cursor={{ stroke: 'var(--color-border)' }} />
-                <Area
-                    type="monotone"
-                    dataKey="mrr"
-                    stroke="var(--color-primary)"
-                    strokeWidth={2}
-                    fill="url(#platform-mrr)"
-                />
-            </AreaChart>
-        </ResponsiveContainer>
-    );
 }
 
 /** A single plan-distribution row with a semantic share bar. */
@@ -147,13 +96,38 @@ function DistributionRow({ slice }: { slice: PlanDistributionSlice }): JSX.Eleme
     );
 }
 
+/** A single recently onboarded company row with status pill. */
+function RecentCompanyRow({ company }: { company: RecentCompanyDto }): JSX.Element {
+    return (
+        <li className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-foreground">{company.name}</p>
+                <p className="text-xs text-muted-foreground">
+                    Onboarded {format(parseISO(company.created_at), 'dd MMM yyyy')}
+                </p>
+            </div>
+            <span
+                className={cn(
+                    'shrink-0 rounded-full px-2.5 py-1 text-xs font-medium',
+                    statusTone(company.status),
+                )}
+            >
+                {statusLabel(company.status)}
+            </span>
+        </li>
+    );
+}
+
 /** Inner dashboard view (relies on an ancestor QueryClientProvider). */
 function PlatformOverview(): JSX.Element {
     const { data, isLoading, isError, refetch } = usePlatformMetrics();
+    const {
+        data: billing,
+        isLoading: billingLoading,
+    } = usePlatformBillingMetrics();
 
-    const health = HEALTH_META[data?.systemHealth ?? 'operational'];
-    const growth = data?.revenue.growthRatePct ?? 0;
-    const growthPositive = growth >= 0;
+    const recentCompanies = useMemo(() => data?.recentCompanies ?? [], [data]);
+    const hasPlans = (data?.planDistribution.length ?? 0) > 0;
 
     return (
         <div className="space-y-6">
@@ -163,44 +137,95 @@ function PlatformOverview(): JSX.Element {
                     Platform Overview
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                    Cross-tenant revenue, adoption and system health across the platform.
+                    Cross-tenant adoption, plan distribution and recent activity across the
+                    platform.
                 </p>
             </div>
 
-            {/* Aggregation metrics ribbon */}
+            {/* Aggregation metrics ribbon — all values come from the live platform dashboard */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <StatCard
-                    title="Monthly Recurring Revenue"
-                    value={formatAud(data?.revenue.mrr ?? 0)}
-                    icon={DollarSign}
-                    tone="primary"
-                    description={`ARR ${formatAud(data?.revenue.arr ?? 0)}`}
-                    isLoading={isLoading}
-                />
-                <StatCard
-                    title="Active Tenants"
-                    value={data?.activeTenants ?? 0}
+                    title="Total Companies"
+                    value={data?.stats.totalCompanies ?? 0}
                     icon={Building2}
-                    tone="info"
-                    description={`${data?.totalTenants ?? 0} total · ${data?.suspendedTenants ?? 0} suspended`}
+                    tone="primary"
+                    description="Registered on the platform"
                     isLoading={isLoading}
                 />
                 <StatCard
-                    title="Employees Scheduled"
-                    value={(data?.employeesScheduled ?? 0).toLocaleString('en-AU')}
-                    icon={Users}
+                    title="Active Companies"
+                    value={data?.stats.activeCompanies ?? 0}
+                    icon={TrendingUp}
                     tone="success"
-                    description="Across Australia"
+                    description={`${data?.suspendedTenants ?? 0} suspended`}
                     isLoading={isLoading}
                 />
                 <StatCard
-                    title="System Health"
-                    value={health.label}
-                    icon={ShieldCheck}
-                    tone={health.tone}
-                    description={`MoM ${growthPositive ? '+' : ''}${growth}%`}
+                    title="Total Employees"
+                    value={(data?.stats.totalEmployees ?? 0).toLocaleString('en-AU')}
+                    icon={Users}
+                    tone="info"
+                    description="Across all companies"
                     isLoading={isLoading}
                 />
+                <StatCard
+                    title="Active Subscriptions"
+                    value={data?.stats.activeSubscriptions ?? 0}
+                    icon={CreditCard}
+                    tone="warning"
+                    description="Paid subscription plans"
+                    isLoading={isLoading}
+                />
+            </div>
+
+            {/* Revenue & retention ribbon — real MRR/ARR/Revenue/Churn aggregates */}
+            <div className="space-y-3">
+                <div className="space-y-1">
+                    <h2 className="text-base font-semibold tracking-tight text-foreground">
+                        Revenue & Retention
+                    </h2>
+                    <p className="text-sm text-muted-foreground">
+                        Real billing aggregates across all tenants.
+                    </p>
+                </div>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <StatCard
+                        title="Monthly Recurring Revenue"
+                        value={formatMoney(billing?.mrr)}
+                        icon={Wallet}
+                        tone="primary"
+                        description="MRR from active subscriptions"
+                        isLoading={billingLoading}
+                    />
+                    <StatCard
+                        title="Annual Recurring Revenue"
+                        value={formatMoney(billing?.arr)}
+                        icon={Wallet}
+                        tone="success"
+                        description="ARR projection"
+                        isLoading={billingLoading}
+                    />
+                    <StatCard
+                        title="Total Revenue"
+                        value={formatMoney(billing?.revenue)}
+                        icon={TrendingUp}
+                        tone="info"
+                        description="Accumulated across tenants"
+                        isLoading={billingLoading}
+                    />
+                    <StatCard
+                        title="Churn Rate"
+                        value={formatPercent(billing?.churnRate)}
+                        icon={Users}
+                        tone={billing && billing.churnRate > 0 ? 'danger' : 'warning'}
+                        description={
+                            billing
+                                ? `${billing.churnedCount} churned / ${billing.churnActiveBase} active`
+                                : 'Retention across tenants'
+                        }
+                        isLoading={billingLoading}
+                    />
+                </div>
             </div>
 
             {isError ? (
@@ -226,40 +251,6 @@ function PlatformOverview(): JSX.Element {
                 </div>
             ) : (
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                    {/* Revenue trend */}
-                    <section className="rounded-xl border border-border bg-card p-5 shadow-sm lg:col-span-2">
-                        <header className="mb-4 flex items-center justify-between">
-                            <div>
-                                <h2 className="text-base font-semibold tracking-tight text-foreground">
-                                    Recurring Revenue
-                                </h2>
-                                <p className="text-sm text-muted-foreground">Last 12 months (AUD)</p>
-                            </div>
-                            <span
-                                className={cn(
-                                    'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium',
-                                    growthPositive
-                                        ? 'bg-success/10 text-success'
-                                        : 'bg-danger/10 text-danger',
-                                )}
-                            >
-                                {growthPositive ? (
-                                    <TrendingUp className="h-3.5 w-3.5" aria-hidden="true" />
-                                ) : (
-                                    <TrendingDown className="h-3.5 w-3.5" aria-hidden="true" />
-                                )}
-                                {growthPositive ? '+' : ''}
-                                {growth}%
-                            </span>
-                        </header>
-
-                        {isLoading ? (
-                            <LoadingSkeleton className="h-72 w-full" radius="lg" />
-                        ) : (
-                            <PlatformRevenueChart data={data?.revenue.trend ?? []} />
-                        )}
-                    </section>
-
                     {/* Plan distribution */}
                     <section
                         className="rounded-xl border border-border bg-card p-5 shadow-sm"
@@ -269,7 +260,7 @@ function PlatformOverview(): JSX.Element {
                             <h2 className="text-base font-semibold tracking-tight text-foreground">
                                 Plan Distribution
                             </h2>
-                            <p className="text-sm text-muted-foreground">Tenants by subscription tier</p>
+                            <p className="text-sm text-muted-foreground">Companies by subscription plan</p>
                         </header>
 
                         {isLoading ? (
@@ -281,16 +272,57 @@ function PlatformOverview(): JSX.Element {
                                     </div>
                                 ))}
                             </div>
-                        ) : (data?.planDistribution.length ?? 0) === 0 ? (
+                        ) : !hasPlans ? (
                             <EmptyState
-                                title="No tenants yet"
-                                description="Tenant plan adoption will appear here."
+                                title="No subscriptions yet"
+                                description="Plan adoption will appear here as companies subscribe."
                                 className="border-0 bg-transparent p-6"
                             />
                         ) : (
                             <ul className="space-y-4">
                                 {data?.planDistribution.map((slice) => (
-                                    <DistributionRow key={slice.tier} slice={slice} />
+                                    <DistributionRow key={slice.id} slice={slice} />
+                                ))}
+                            </ul>
+                        )}
+                    </section>
+
+                    {/* Recent companies */}
+                    <section
+                        className="rounded-xl border border-border bg-card p-5 shadow-sm lg:col-span-2"
+                        aria-label="Recent companies"
+                    >
+                        <header className="mb-4 flex items-center justify-between">
+                            <div>
+                                <h2 className="text-base font-semibold tracking-tight text-foreground">
+                                    Recent Companies
+                                </h2>
+                                <p className="text-sm text-muted-foreground">
+                                    Newest tenants on the platform
+                                </p>
+                            </div>
+                            <CalendarCheck2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                        </header>
+
+                        {isLoading ? (
+                            <div className="space-y-4">
+                                {Array.from({ length: 4 }).map((_, index) => (
+                                    <div key={index} className="space-y-2">
+                                        <LoadingSkeleton className="h-4 w-2/5" radius="sm" />
+                                        <LoadingSkeleton className="h-3 w-3/5" radius="sm" />
+                                    </div>
+                                ))}
+                            </div>
+                        ) : recentCompanies.length === 0 ? (
+                            <EmptyState
+                                title="No companies yet"
+                                description="Newly created companies will appear here."
+                                className="border-0 bg-transparent p-6"
+                            />
+                        ) : (
+                            <ul className="divide-y divide-border">
+                                {recentCompanies.map((company) => (
+                                    <RecentCompanyRow key={company.id} company={company} />
                                 ))}
                             </ul>
                         )}
@@ -304,7 +336,8 @@ function PlatformOverview(): JSX.Element {
 /**
  * Super Admin platform dashboard. Owns the feature-scoped QueryClient, wraps
  * the view in a resilient error boundary, and composes the aggregation metrics
- * ribbon, the recurring-revenue trend chart and the plan-distribution panel.
+ * ribbon, the plan-distribution panel and the recent-companies feed — all fed
+ * by the live `GET /dashboard/overview` endpoint.
  */
 export default function SuperAdminDashboard(): JSX.Element {
     return (

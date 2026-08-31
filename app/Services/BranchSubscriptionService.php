@@ -247,7 +247,7 @@ class BranchSubscriptionService
 
         if ($used + $additional > $capacity) {
             throw new BranchCapacityException(
-                'This branch has reached its employee capacity.',
+                'Employee capacity reached. Contact your company administrator.',
                 'EMPLOYEE_CAPACITY_REACHED',
                 [
                     'branch_id' => $branch->id,

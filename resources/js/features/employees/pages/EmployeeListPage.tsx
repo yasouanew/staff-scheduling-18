@@ -19,6 +19,7 @@ import { StatusBadge } from '@/Components/common/StatusBadge';
 import { DataTable } from '@/Components/tables/DataTable';
 import { useBranchOptions } from '@/features/branches/hooks/useBranches';
 import { useDepartmentOptions } from '@/features/departments/hooks/useDepartments';
+import { normalizeWebRole, useWebSession } from '@/features/auth/hooks/useWebSession';
 import { cn } from '@/lib/utils';
 import { type Employee } from '@/types/employee';
 
@@ -85,7 +86,11 @@ interface EmployeeRowHandlers {
  * state. The result is memoised by the caller so TanStack Table does not see a
  * new column identity on every render.
  */
-function buildColumns({ onEdit, onSendInvite }: EmployeeRowHandlers): ColumnDef<Employee>[] {
+function buildColumns({
+    onEdit,
+    onSendInvite,
+    isEditable,
+}: EmployeeRowHandlers & { isEditable: boolean }): ColumnDef<Employee>[] {
     return [
         {
             id: 'name',
@@ -183,22 +188,26 @@ function buildColumns({ onEdit, onSendInvite }: EmployeeRowHandlers): ColumnDef<
                 cellClassName: 'hidden text-right lg:table-cell',
             },
         },
-        {
-            id: 'actions',
-            // The column is self-explanatory from its icon; a visible label would
-            // only add noise, so it is exposed to assistive tech instead.
-            header: () => <span className="sr-only">Actions</span>,
-            enableSorting: false,
-            enableHiding: false,
-            cell: ({ row }) => (
-                <EmployeeRowActions
-                    employee={row.original}
-                    onEdit={onEdit}
-                    onSendInvite={onSendInvite}
-                />
-            ),
-            meta: { headerClassName: 'w-12 text-right', cellClassName: 'text-right' },
-        },
+        ...(isEditable
+            ? [
+                {
+                    id: 'actions',
+                    // The column is self-explanatory from its icon; a visible label
+                    // would only add noise, so it is exposed to assistive tech instead.
+                    header: () => <span className="sr-only">Actions</span>,
+                    enableSorting: false,
+                    enableHiding: false,
+                    cell: ({ row }: { row: { original: Employee } }) => (
+                        <EmployeeRowActions
+                            employee={row.original}
+                            onEdit={onEdit}
+                            onSendInvite={onSendInvite}
+                        />
+                    ),
+                    meta: { headerClassName: 'w-12 text-right', cellClassName: 'text-right' },
+                } as ColumnDef<Employee>,
+            ]
+            : []),
     ];
 }
 
@@ -217,6 +226,11 @@ function EmployeeDirectory(): JSX.Element {
      */
     const [employeeToEdit, setEmployeeToEdit] = useState<Employee | null>(null);
     const [employeeToInvite, setEmployeeToInvite] = useState<Employee | null>(null);
+
+    // Schedulers can view the directory but only company admins can add, edit or
+    // invite team members (the backend enforces `employee.create`/`employee.edit`).
+    const session = useWebSession();
+    const isCompanyAdmin = normalizeWebRole(session.data) === 'company_admin';
 
     // Branch and department narrowing happen server-side; search stays client-side.
     const { data, isLoading, isError, refetch } = useEmployees({
@@ -257,8 +271,13 @@ function EmployeeDirectory(): JSX.Element {
     const handleSendInvite = useCallback((employee: Employee) => setEmployeeToInvite(employee), []);
 
     const columns = useMemo(
-        () => buildColumns({ onEdit: handleEdit, onSendInvite: handleSendInvite }),
-        [handleEdit, handleSendInvite],
+        () =>
+            buildColumns({
+                onEdit: handleEdit,
+                onSendInvite: handleSendInvite,
+                isEditable: isCompanyAdmin,
+            }),
+        [handleEdit, handleSendInvite, isCompanyAdmin],
     );
 
     return (
@@ -273,17 +292,19 @@ function EmployeeDirectory(): JSX.Element {
                         Manage your team, invite new members and track employment status.
                     </p>
                 </div>
-                <button
-                    type="button"
-                    onClick={() => setIsModalOpen(true)}
-                    className={cn(
-                        'inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors',
-                        'hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-                    )}
-                >
-                    <UserPlus className="h-4 w-4" aria-hidden="true" />
-                    Add employee
-                </button>
+                {isCompanyAdmin ? (
+                    <button
+                        type="button"
+                        onClick={() => setIsModalOpen(true)}
+                        className={cn(
+                            'inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors',
+                            'hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                        )}
+                    >
+                        <UserPlus className="h-4 w-4" aria-hidden="true" />
+                        Add employee
+                    </button>
+                ) : null}
             </div>
 
             {/* KPI summary row */}

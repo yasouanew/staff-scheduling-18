@@ -15,41 +15,40 @@ import {
     X,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { ErrorBoundary } from '@/Components/common/ErrorBoundary';
 import { StatCard } from '@/Components/common/StatCard';
 import { DataTable } from '@/Components/tables/DataTable';
 import { Badge, type BadgeTone } from '@/Components/ui/badge';
-import { formatAud } from '@/lib/chart';
+import { getApiErrorMessage } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
-import type { SubscriptionStatus, TenantCompany } from '@/types/super-admin';
+import type { Company, CompanyStatus } from '@/types/company';
+import { COMPANY_STATUS_LABELS } from '@/types/company';
 
-import { useSetTenantStatus, useTenantCompanies } from '../hooks/useSuperAdmin';
+import { useTenantCompanies } from '../hooks/useSuperAdmin';
+import { useUpdateCompanyStatus } from '@/features/companies/hooks/useCompanies';
 
 /** Dedicated client so the ledger works standalone. */
 const queryClient = new QueryClient({
     defaultOptions: { queries: { refetchOnWindowFocus: false, retry: 1 } },
 });
 
-/** Label + semantic tone + dot token pairing per subscription status. */
-const STATUS_MAP: Record<SubscriptionStatus, { label: string; tone: BadgeTone; dot: string }> = {
+/** Label + semantic tone + dot token pairing per company status. */
+const STATUS_MAP: Record<CompanyStatus, { label: string; tone: BadgeTone; dot: string }> = {
     active: { label: 'Active', tone: 'success', dot: 'bg-success' },
-    trialing: { label: 'Trialing', tone: 'info', dot: 'bg-info' },
-    past_due: { label: 'Past due', tone: 'warning', dot: 'bg-warning' },
-    grace_period: { label: 'Grace period', tone: 'warning', dot: 'bg-warning' },
+    inactive: { label: 'Inactive', tone: 'neutral', dot: 'bg-muted-foreground' },
     suspended: { label: 'Suspended', tone: 'danger', dot: 'bg-danger' },
-    cancelled: { label: 'Cancelled', tone: 'neutral', dot: 'bg-muted-foreground' },
-    expired: { label: 'Expired', tone: 'neutral', dot: 'bg-muted-foreground' },
 };
 
 /**
- * Accessible subscription-status pill.
+ * Accessible company-status pill.
  *
- * Built on the shared `Badge` primitive so tenant statuses match every other
+ * Built on the shared `Badge` primitive so company statuses match every other
  * status pill in the application.
  */
-function TenantStatusBadge({ status }: { status: SubscriptionStatus }): JSX.Element {
+function CompanyStatusBadge({ status }: { status: CompanyStatus }): JSX.Element {
     const { label, tone, dot } = STATUS_MAP[status];
     return (
         <Badge variant={tone}>
@@ -59,7 +58,7 @@ function TenantStatusBadge({ status }: { status: SubscriptionStatus }): JSX.Elem
     );
 }
 
-/** Single read-only field row inside the tenant details dialog. */
+/** Single read-only field row inside the company details dialog. */
 function DetailRow({ label, value }: { label: string; value: string }): JSX.Element {
     return (
         <div className="flex items-center justify-between gap-4 py-2">
@@ -70,35 +69,42 @@ function DetailRow({ label, value }: { label: string; value: string }): JSX.Elem
 }
 
 /**
- * Per-row action menu: view tenant information or flag/suspend the tenant.
- * Owns its dialog state and calls the suspend/reactivate mutation directly, so
- * the column definition stays declarative.
+ * Per-row action menu: view company information or suspend/reactivate the
+ * company. Owns its dialog state and calls the real companies status mutation
+ * (`PUT /companies/{id}`), so there is a single status-update path.
  */
-function CompanyActionsMenu({ tenant }: { tenant: TenantCompany }): JSX.Element {
-    const setStatus = useSetTenantStatus();
+function CompanyActionsMenu({ company }: { company: Company }): JSX.Element {
+    const updateStatus = useUpdateCompanyStatus();
     const [viewOpen, setViewOpen] = useState(false);
     const [confirmOpen, setConfirmOpen] = useState(false);
-    const isSuspended = tenant.status === 'suspended';
+    const isSuspended = company.status === 'suspended';
 
     const handleConfirmSuspend = (): void => {
-        setStatus.mutate(
-            { tenantId: tenant.id, status: 'suspended' },
+        updateStatus.mutate(
+            { id: company.id, status: 'suspended' },
             {
                 onSuccess: () => {
-                    toast.success(`${tenant.name} suspended.`);
+                    toast.success(`${company.name} suspended.`);
                     setConfirmOpen(false);
                 },
-                onError: () => toast.error('Unable to suspend tenant.'),
+                onError: (error) =>
+                    toast.error('Unable to suspend company.', {
+                        description: getApiErrorMessage(error, 'Please try again.'),
+                    }),
             },
         );
     };
 
     const handleReactivate = (): void => {
-        setStatus.mutate(
-            { tenantId: tenant.id, status: 'active' },
+        updateStatus.mutate(
+            { id: company.id, status: 'active' },
             {
-                onSuccess: () => toast.success(`${tenant.name} reactivated.`),
-                onError: () => toast.error('Unable to reactivate tenant.'),
+                onSuccess: () =>
+                    toast.success(`${company.name} reactivated.`),
+                onError: (error) =>
+                    toast.error('Unable to reactivate company.', {
+                        description: getApiErrorMessage(error, 'Please try again.'),
+                    }),
             },
         );
     };
@@ -109,7 +115,7 @@ function CompanyActionsMenu({ tenant }: { tenant: TenantCompany }): JSX.Element 
                 <DropdownMenu.Trigger asChild>
                     <button
                         type="button"
-                        aria-label={`Actions for ${tenant.name}`}
+                        aria-label={`Actions for ${company.name}`}
                         className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-input bg-card text-muted-foreground transition-colors hover:bg-secondary hover:text-secondary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                         <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
@@ -126,7 +132,16 @@ function CompanyActionsMenu({ tenant }: { tenant: TenantCompany }): JSX.Element 
                             className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground"
                         >
                             <Eye className="h-4 w-4" aria-hidden="true" />
-                            View details
+                            Quick view
+                        </DropdownMenu.Item>
+                        <DropdownMenu.Item
+                            asChild
+                            className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground"
+                        >
+                            <Link to={`/super-admin/companies/${company.id}`}>
+                                <Building2 className="h-4 w-4" aria-hidden="true" />
+                                Platform detail
+                            </Link>
                         </DropdownMenu.Item>
                         <DropdownMenu.Separator className="my-1 h-px bg-border" />
                         {isSuspended ? (
@@ -135,7 +150,7 @@ function CompanyActionsMenu({ tenant }: { tenant: TenantCompany }): JSX.Element 
                                 className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-success outline-none transition-colors focus:bg-success/10"
                             >
                                 <ShieldCheck className="h-4 w-4" aria-hidden="true" />
-                                Reactivate tenant
+                                Reactivate company
                             </DropdownMenu.Item>
                         ) : (
                             <DropdownMenu.Item
@@ -143,7 +158,7 @@ function CompanyActionsMenu({ tenant }: { tenant: TenantCompany }): JSX.Element 
                                 className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-danger outline-none transition-colors focus:bg-danger/10"
                             >
                                 <Ban className="h-4 w-4" aria-hidden="true" />
-                                Suspend tenant
+                                Suspend company
                             </DropdownMenu.Item>
                         )}
                     </DropdownMenu.Content>
@@ -158,10 +173,10 @@ function CompanyActionsMenu({ tenant }: { tenant: TenantCompany }): JSX.Element 
                         <div className="mb-4 flex items-start justify-between">
                             <div>
                                 <Dialog.Title className="text-lg font-semibold text-foreground">
-                                    {tenant.name}
+                                    {company.name}
                                 </Dialog.Title>
                                 <Dialog.Description className="text-sm text-muted-foreground">
-                                    {tenant.contactEmail}
+                                    {company.email ?? 'No contact email'}
                                 </Dialog.Description>
                             </div>
                             <Dialog.Close asChild>
@@ -175,17 +190,34 @@ function CompanyActionsMenu({ tenant }: { tenant: TenantCompany }): JSX.Element 
                             </Dialog.Close>
                         </div>
                         <dl className="divide-y divide-border">
-                            <DetailRow label="Plan" value={tenant.planName} />
-                            <DetailRow label="Status" value={STATUS_MAP[tenant.status].label} />
                             <DetailRow
-                                label="Active staff"
-                                value={`${tenant.activeStaff.toLocaleString('en-AU')} / ${tenant.seatLimit.toLocaleString('en-AU')}`}
+                                label="Status"
+                                value={COMPANY_STATUS_LABELS[company.status]}
                             />
-                            <DetailRow label="MRR" value={formatAud(tenant.mrr)} />
-                            <DetailRow label="State" value={tenant.state} />
+                            <DetailRow
+                                label="Branches"
+                                value={String(company.branchesCount ?? 0)}
+                            />
+                            <DetailRow
+                                label="Employees"
+                                value={String(company.employeesCount ?? 0)}
+                            />
+                            <DetailRow label="Users" value={String(company.usersCount ?? 0)} />
+                            <DetailRow
+                                label="ABN"
+                                value={company.abn ?? '—'}
+                            />
+                            <DetailRow
+                                label="State"
+                                value={company.state ?? '—'}
+                            />
                             <DetailRow
                                 label="Onboarded"
-                                value={format(parseISO(tenant.createdAt), 'dd MMM yyyy')}
+                                value={
+                                    company.createdAt
+                                        ? format(parseISO(company.createdAt), 'dd MMM yyyy')
+                                        : '—'
+                                }
                             />
                         </dl>
                     </Dialog.Content>
@@ -198,10 +230,10 @@ function CompanyActionsMenu({ tenant }: { tenant: TenantCompany }): JSX.Element 
                     <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
                     <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-card p-6 shadow-xl focus:outline-none">
                         <AlertDialog.Title className="text-lg font-semibold text-foreground">
-                            Suspend {tenant.name}?
+                            Suspend {company.name}?
                         </AlertDialog.Title>
                         <AlertDialog.Description className="mt-2 text-sm text-muted-foreground">
-                            The tenant will immediately lose access and billing will pause. You can
+                            The company will immediately lose access to the platform. You can
                             reactivate them at any time.
                         </AlertDialog.Description>
                         <div className="mt-6 flex justify-end gap-3">
@@ -216,10 +248,10 @@ function CompanyActionsMenu({ tenant }: { tenant: TenantCompany }): JSX.Element 
                             <button
                                 type="button"
                                 onClick={handleConfirmSuspend}
-                                disabled={setStatus.isPending}
+                                disabled={updateStatus.isPending}
                                 className="inline-flex h-10 items-center justify-center rounded-lg bg-danger px-4 text-sm font-semibold text-danger-foreground transition-colors hover:bg-danger/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60"
                             >
-                                {setStatus.isPending ? 'Suspending…' : 'Suspend tenant'}
+                                {updateStatus.isPending ? 'Suspending…' : 'Suspend company'}
                             </button>
                         </div>
                     </AlertDialog.Content>
@@ -229,8 +261,8 @@ function CompanyActionsMenu({ tenant }: { tenant: TenantCompany }): JSX.Element 
     );
 }
 
-/** Tenant ledger columns. */
-const columns: ColumnDef<TenantCompany>[] = [
+/** Company ledger columns. */
+const columns: ColumnDef<Company>[] = [
     {
         id: 'name',
         accessorKey: 'name',
@@ -238,45 +270,50 @@ const columns: ColumnDef<TenantCompany>[] = [
         cell: ({ row }) => (
             <div className="min-w-0">
                 <p className="truncate font-medium text-foreground">{row.original.name}</p>
-                <p className="truncate text-xs text-muted-foreground">{row.original.contactEmail}</p>
+                <p className="truncate text-xs text-muted-foreground">
+                    {row.original.email ?? 'No contact email'}
+                </p>
             </div>
         ),
     },
     {
-        id: 'plan',
-        accessorKey: 'planName',
-        header: 'Plan',
-        cell: ({ row }) => <span className="text-foreground">{row.original.planName}</span>,
+        id: 'branches',
+        accessorKey: 'branchesCount',
+        header: 'Branches',
+        cell: ({ row }) => (
+            <span className="whitespace-nowrap text-muted-foreground">
+                {row.original.branchesCount ?? 0}
+            </span>
+        ),
         meta: { headerClassName: 'hidden md:table-cell', cellClassName: 'hidden md:table-cell' },
     },
     {
-        id: 'activeStaff',
-        accessorKey: 'activeStaff',
-        header: 'Active Staff',
+        id: 'employees',
+        accessorKey: 'employeesCount',
+        header: 'Employees',
         cell: ({ row }) => (
             <span className="whitespace-nowrap text-muted-foreground">
-                {row.original.activeStaff.toLocaleString('en-AU')}
-                <span className="text-xs"> / {row.original.seatLimit.toLocaleString('en-AU')}</span>
+                {(row.original.employeesCount ?? 0).toLocaleString('en-AU')}
             </span>
         ),
         meta: { headerClassName: 'hidden lg:table-cell', cellClassName: 'hidden lg:table-cell' },
     },
     {
-        id: 'mrr',
-        accessorKey: 'mrr',
-        header: 'MRR',
+        id: 'users',
+        accessorKey: 'usersCount',
+        header: 'Users',
         cell: ({ row }) => (
-            <span className="whitespace-nowrap font-medium text-foreground">
-                {formatAud(row.original.mrr)}
+            <span className="whitespace-nowrap text-muted-foreground">
+                {row.original.usersCount ?? 0}
             </span>
         ),
-        meta: { headerClassName: 'hidden sm:table-cell', cellClassName: 'hidden sm:table-cell' },
+        meta: { headerClassName: 'hidden lg:table-cell', cellClassName: 'hidden lg:table-cell' },
     },
     {
         id: 'status',
         accessorKey: 'status',
         header: 'Status',
-        cell: ({ row }) => <TenantStatusBadge status={row.original.status} />,
+        cell: ({ row }) => <CompanyStatusBadge status={row.original.status} />,
     },
     {
         id: 'actions',
@@ -284,7 +321,7 @@ const columns: ColumnDef<TenantCompany>[] = [
         enableHiding: false,
         cell: ({ row }) => (
             <div className="flex justify-end">
-                <CompanyActionsMenu tenant={row.original} />
+                <CompanyActionsMenu company={row.original} />
             </div>
         ),
         meta: { headerClassName: 'w-12', cellClassName: 'w-12' },
@@ -294,20 +331,20 @@ const columns: ColumnDef<TenantCompany>[] = [
 /** Inner ledger view (relies on an ancestor QueryClientProvider). */
 function CompanyLedger(): JSX.Element {
     const { data, isLoading, isError, refetch } = useTenantCompanies();
-    const tenants = useMemo(() => data ?? [], [data]);
+    const companies = useMemo(() => data ?? [], [data]);
 
     const counts = useMemo(
         () =>
-            tenants.reduce(
-                (acc, tenant) => {
+            companies.reduce(
+                (acc, company) => {
                     acc.total += 1;
-                    if (tenant.status === 'active' || tenant.status === 'trialing') acc.active += 1;
-                    if (tenant.status === 'suspended') acc.suspended += 1;
+                    if (company.status === 'active') acc.active += 1;
+                    if (company.status === 'suspended') acc.suspended += 1;
                     return acc;
                 },
                 { total: 0, active: 0, suspended: 0 },
             ),
-        [tenants],
+        [companies],
     );
 
     return (
@@ -317,14 +354,14 @@ function CompanyLedger(): JSX.Element {
                     Company Management
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                    Track every tenant organization, monitor subscription health and apply instant
+                    Track every tenant organisation, monitor account status and apply instant
                     overrides.
                 </p>
             </div>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <StatCard
-                    title="Total Tenants"
+                    title="Total Companies"
                     value={counts.total}
                     icon={Building2}
                     tone="primary"
@@ -332,11 +369,11 @@ function CompanyLedger(): JSX.Element {
                     isLoading={isLoading}
                 />
                 <StatCard
-                    title="Active Tenants"
+                    title="Active Companies"
                     value={counts.active}
                     icon={CheckCircle2}
                     tone="success"
-                    description="Active or trialing"
+                    description="Currently active"
                     isLoading={isLoading}
                 />
                 <StatCard
@@ -356,7 +393,7 @@ function CompanyLedger(): JSX.Element {
                     </span>
                     <div className="space-y-1">
                         <p className="text-sm font-semibold text-foreground">
-                            Unable to load tenants
+                            Unable to load companies
                         </p>
                         <p className="text-sm text-muted-foreground">
                             A cross-tenant query failed. Please try again.
@@ -371,9 +408,9 @@ function CompanyLedger(): JSX.Element {
                     </button>
                 </div>
             ) : (
-                <DataTable<TenantCompany, unknown>
+                <DataTable<Company, unknown>
                     columns={columns}
-                    data={tenants}
+                    data={companies}
                     searchKey="name"
                     searchPlaceholder="Search companies..."
                     isLoading={isLoading}
@@ -384,16 +421,17 @@ function CompanyLedger(): JSX.Element {
 }
 
 /**
- * Super Admin tenant ledger. Owns the feature-scoped QueryClient, guards the
- * view with an error boundary, and renders the tenant DataTable with semantic
- * status states plus per-row view/suspend overrides.
+ * Super Admin company ledger. Owns the feature-scoped QueryClient, guards the
+ * view with an error boundary, and renders the company DataTable with semantic
+ * status states plus per-row view/suspend overrides — all backed by the real
+ * companies API.
  */
 export default function CompanyManagementPage(): JSX.Element {
     return (
         <QueryClientProvider client={queryClient}>
             <ErrorBoundary
                 title="Company management unavailable"
-                description="An unexpected error interrupted the tenant ledger. You can retry safely."
+                description="An unexpected error interrupted the company ledger. You can retry safely."
             >
                 <CompanyLedger />
             </ErrorBoundary>

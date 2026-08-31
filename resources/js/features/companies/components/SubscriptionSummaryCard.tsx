@@ -25,7 +25,7 @@ function resolveTone(subscription: CompanySubscription): {
         };
     }
     if (subscription.onTrial) {
-        return { label: 'Trialing', classes: 'bg-info/10 text-info', dot: 'bg-info' };
+        return { label: 'Trial', classes: 'bg-info/10 text-info', dot: 'bg-info' };
     }
     if (subscription.isActive) {
         return { label: 'Active', classes: 'bg-success/10 text-success', dot: 'bg-success' };

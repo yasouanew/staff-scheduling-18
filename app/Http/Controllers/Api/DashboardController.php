@@ -12,6 +12,7 @@ use App\Models\Plan;
 use App\Models\Roster;
 use App\Models\Shift;
 use App\Models\Subscription;
+use App\Models\SubscriptionPayment;
 use App\Traits\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -71,6 +72,12 @@ class DashboardController extends Controller
                 'total_employees' => $totalEmployees,
                 'active_subscriptions' => $activeSubscriptions,
             ],
+            'metrics' => [
+                'mrr' => $this->computeMrr(),
+                'arr' => $this->computeArr(),
+                'revenue' => $this->computeRevenue(),
+                'churn' => $this->computeChurn(),
+            ],
             'plan_distribution' => $planDistribution,
             'recent_companies' => Company::query()
                 ->latest()
@@ -83,6 +90,69 @@ class DashboardController extends Controller
                     'created_at' => $company->created_at?->toIso8601String(),
                 ])
                 ->all(),
+        ];
+    }
+
+    /**
+     * Compute monthly recurring revenue from active / trialing subscriptions.
+     */
+    protected function computeMrr(): float
+    {
+        $mrr = 0.0;
+        Subscription::query()
+            ->whereIn('status', ['active', 'trialing'])
+            ->with('plan')
+            ->get()
+            ->each(function (Subscription $subscription) use (&$mrr) {
+                $plan = $subscription->plan;
+                if (! $plan) {
+                    return;
+                }
+                $mrr += match ($subscription->billing_cycle) {
+                    'yearly' => (float) $plan->price_yearly / 12,
+                    'six_month' => (float) $plan->price_six_monthly / 6,
+                    default => (float) $plan->price_monthly,
+                };
+            });
+
+        return round($mrr, 2);
+    }
+
+    /**
+     * Compute annual recurring revenue from the monthly recurring revenue.
+     */
+    protected function computeArr(): float
+    {
+        return round($this->computeMrr() * 12, 2);
+    }
+
+    /**
+     * Compute recognized revenue as the sum of all succeeded payments.
+     */
+    protected function computeRevenue(): float
+    {
+        return round(
+            (float) SubscriptionPayment::query()->where('status', 'succeeded')->sum('amount'),
+            2
+        );
+    }
+
+    /**
+     * Compute trailing-30-day churn rate as a percentage of active subscriptions.
+     *
+     * @return array<string, mixed>
+     */
+    protected function computeChurn(): array
+    {
+        $activeBase = Subscription::where('status', 'active')->count();
+        $churned = Subscription::where('status', 'active')
+            ->where('cancelled_at', '>=', now()->subDays(30))
+            ->count();
+
+        return [
+            'churned_count' => $churned,
+            'active_base' => $activeBase,
+            'rate' => $activeBase > 0 ? round(($churned / $activeBase) * 100, 2) : 0.0,
         ];
     }
 

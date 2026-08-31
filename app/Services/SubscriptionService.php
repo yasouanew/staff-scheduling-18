@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Billing\BillingProvider;
+use App\Enums\SubscriptionStatus;
 use App\Models\Company;
 use App\Models\Plan;
 use App\Models\Subscription;
@@ -10,10 +11,31 @@ use App\Models\SubscriptionPayment;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * Canonical subscription domain service.
+ *
+ * Every subscription lifecycle operation — creating, activating, cancelling,
+ * resuming, changing plan, changing billing period, and resolving the current
+ * plan / status / entitlements — flows through this single service. Both the
+ * company self-service surface ({@see \App\Http\Controllers\Api\PlanSubscriptionController})
+ * and the explicit-company platform surface
+ * ({@see \App\Http\Controllers\Api\SubscriptionController}) call the same
+ * methods here, so business rules (downgrade validation, Stripe reconciliation,
+ * entitlement windows) are never duplicated in a controller.
+ *
+ * Layering:
+ *
+ *     Controller → SubscriptionService (application + domain) → BillingProvider
+ *
+ * The billing provider is the only component that talks to Stripe; this service
+ * decides WHEN to call it and reconciles the local application state.
+ */
 class SubscriptionService
 {
     public function __construct(
         private readonly BillingProvider $billing,
+        private readonly EntitlementService $entitlements,
+        private readonly UsageService $usage,
     ) {
     }
     /**
@@ -67,6 +89,16 @@ class SubscriptionService
 
         if (! $priceId) {
             throw new \RuntimeException('The selected plan is not configured with a Stripe price for this billing cycle.');
+        }
+
+        // Pre-flight: when the company already holds an entitled subscription,
+        // opening a checkout is a plan change — so it must satisfy the same
+        // branch / employee allowance rules as an upgrade or downgrade. A
+        // checkout can never be used to bypass the downgrade validation.
+        $current = $this->entitledSubscription($company);
+
+        if ($current) {
+            $this->assertCanChangeToPlan($current, $plan);
         }
 
         return DB::transaction(function () use ($company, $user, $plan, $cycle, $trialDays, $priceId) {
@@ -257,38 +289,17 @@ class SubscriptionService
     }
 
     /**
-     * Swap the subscription to a different plan / billing cycle.
-     */
-    public function swap(Subscription $subscription, Plan $plan, ?string $cycle = null): Subscription
-    {
-        $cycle = $cycle ?? $subscription->billing_cycle;
-
-        return DB::transaction(function () use ($subscription, $plan, $cycle) {
-            $priceId = $this->priceIdFor($plan, $cycle);
-
-            if ($subscription->stripe_id && $subscription->user && $priceId) {
-                $this->billing->swap($subscription->user, $subscription, $plan, $cycle);
-            }
-
-            $subscription->update([
-                'plan_id' => $plan->id,
-                'billing_cycle' => $cycle,
-                'stripe_price' => $subscription->stripe_id ? $priceId : $subscription->stripe_price,
-            ]);
-
-            return $subscription->fresh();
-        });
-    }
-
-    /**
-     * Change the subscription's plan after validating that the business can
-     * still fit inside the target plan's allowances.
+     * Change the subscription's plan / billing cycle after validating that the
+     * business can still fit inside the target plan's allowances.
      *
-     * This is the single backend decision point for upgrade/downgrade:
+     * This is the single backend decision point for upgrade / downgrade /
+     * billing-period changes. Both the company self-service surface and the
+     * explicit-company platform surface route through here, so a downgrade can
+     * never bypass the allowance validation:
      *
      *  - the target plan is resolved from the database (never trusted from the
      *    frontend);
-     *  - a downgrade is rejected (structured BillingLimitException) when the
+     *  - a change is rejected (structured BillingLimitException) when the
      *    business currently has more active branches than the target plan's
      *    `max_branches`, or more active employees than the target plan's
      *    `max_employees`;
@@ -305,37 +316,9 @@ class SubscriptionService
     ): Subscription {
         $cycle = $cycle ?? $subscription->billing_cycle;
 
+        $this->assertCanChangeToPlan($subscription, $plan);
+
         return DB::transaction(function () use ($subscription, $plan, $cycle, $actor) {
-            $company = $subscription->company;
-
-            $usage = app(\App\Services\UsageService::class);
-
-            // Branch allowance check.
-            if ($plan->max_branches !== null && $usage->activeBranches($company) > $plan->max_branches) {
-                throw new \App\Exceptions\BillingLimitException(
-                    'Your business currently uses more active branches than this plan allows.',
-                    'DOWNGRADE_BRANCH_LIMIT_EXCEEDED',
-                    [
-                        'used' => $usage->activeBranches($company),
-                        'limit' => $plan->max_branches,
-                    ],
-                    422,
-                );
-            }
-
-            // Employee capacity check (total active employees across the business).
-            if ($plan->max_employees !== null && $usage->activeEmployees($company) > $plan->max_employees) {
-                throw new \App\Exceptions\BillingLimitException(
-                    'Your business currently has more active employees than this plan allows.',
-                    'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED',
-                    [
-                        'used' => $usage->activeEmployees($company),
-                        'capacity' => $plan->max_employees,
-                    ],
-                    422,
-                );
-            }
-
             $priceId = $this->priceIdFor($plan, $cycle);
 
             if ($subscription->stripe_id && $subscription->user && $priceId) {
@@ -364,5 +347,129 @@ class SubscriptionService
 
             return $subscription->fresh();
         });
+    }
+
+    /**
+     * Change only the billing cycle while keeping the current plan.
+     *
+     * Delegates to {@see self::changePlan()} so the change is reconciled with
+     * Stripe and follows the exact same validation path as an upgrade/downgrade
+     * (a same-plan cycle change always passes the allowance checks because the
+     * business already fits inside its own plan).
+     *
+     * @param  string  $cycle  The new billing cycle (monthly|six_month|yearly).
+     */
+    public function changeBillingPeriod(Subscription $subscription, string $cycle, ?User $actor = null): Subscription
+    {
+        $plan = $subscription->plan;
+
+        abort_unless($plan, 422, 'Cannot change the billing period without an assigned plan.');
+
+        return $this->changePlan($subscription, $plan, $cycle, $actor);
+    }
+
+    /**
+     * Validate that the business can switch its subscription to the target plan.
+     *
+     * Raises a structured {@see \App\Exceptions\BillingLimitException} (422) when
+     * the business currently uses more active branches than the target plan's
+     * `max_branches` or more active employees than the target plan's
+     * `max_employees`. Exposed separately so callers can pre-flight a plan
+     * change before committing it.
+     */
+    public function assertCanChangeToPlan(Subscription $subscription, Plan $plan): void
+    {
+        $company = $subscription->company;
+
+        if (! $company) {
+            return;
+        }
+
+        // Branch allowance check.
+        if ($plan->max_branches !== null && $this->usage->activeBranches($company) > $plan->max_branches) {
+            throw new \App\Exceptions\BillingLimitException(
+                'Your business currently uses more active branches than this plan allows.',
+                'DOWNGRADE_BRANCH_LIMIT_EXCEEDED',
+                [
+                    'used' => $this->usage->activeBranches($company),
+                    'limit' => $plan->max_branches,
+                ],
+                422,
+            );
+        }
+
+        // Employee capacity check (total active employees across the business).
+        if ($plan->max_employees !== null && $this->usage->activeEmployees($company) > $plan->max_employees) {
+            throw new \App\Exceptions\BillingLimitException(
+                'Your business currently has more active employees than this plan allows.',
+                'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED',
+                [
+                    'used' => $this->usage->activeEmployees($company),
+                    'capacity' => $plan->max_employees,
+                ],
+                422,
+            );
+        }
+    }
+
+    /**
+     * The plan currently granting a company access, if any.
+     *
+     * Entitlement resolution (active / trialing / grace-period windows) lives in
+     * the EntitlementService; this is the subscription domain's canonical query
+     * façade so controllers never re-implement the entitlement rules.
+     */
+    public function currentPlan(Company $company): ?Plan
+    {
+        return $this->entitlements->entitledPlan($company);
+    }
+
+    /**
+     * The subscription currently granting a company access, if any.
+     */
+    public function entitledSubscription(Company $company): ?Subscription
+    {
+        return $this->entitlements->entitledSubscription($company);
+    }
+
+    /**
+     * The current application status for a company, or null when not entitled.
+     */
+    public function currentStatus(Company $company): ?SubscriptionStatus
+    {
+        $subscription = $this->entitledSubscription($company);
+
+        if (! $subscription) {
+            return null;
+        }
+
+        return SubscriptionStatus::tryFrom((string) $subscription->status);
+    }
+
+    /**
+     * Create a Stripe Customer Portal session for the company.
+     *
+     * The portal lets the company admin self-serve payment-method changes,
+     * invoice history and card updates. Subscription / entitlement state
+     * remains authoritative in the local application; the portal only manages
+     * the payment relationship.
+     */
+    public function billingPortal(Company $company, User $user): string
+    {
+        $subscription = $this->entitledSubscription($company);
+
+        abort_unless($subscription, 422, 'No entitled subscription to manage in the billing portal.');
+
+        return $this->billing->billingPortal($user, $this->billingPortalReturnUrl($company));
+    }
+
+    /**
+     * The frontend URL the admin returns to after leaving the billing portal.
+     */
+    protected function billingPortalReturnUrl(Company $company): string
+    {
+        $baseUrl = rtrim((string) config('app.frontend_url', config('app.url')), '/');
+
+        return $baseUrl.'/companies/'.$company->id.'/subscriptions?portal=return';
     }
 }

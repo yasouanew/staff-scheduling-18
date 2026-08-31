@@ -21,7 +21,7 @@ export function LockedCompanyPage(): JSX.Element {
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
                 Your trial period has ended{trialEndLabel ? ` on ${trialEndLabel}` : ''}. Activate a subscription to restore access to your rosters, employees, leave, and scheduling tools.
             </p>
-            {role === 'company_admin' && companyId ? <Link to={`/companies/${companyId}/subscriptions`} className="mt-6 inline-flex h-11 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ReceiptText className="h-4 w-4" aria-hidden="true" />Choose a subscription</Link> : <p className="mt-6 rounded-lg border border-border bg-secondary px-4 py-3 text-sm text-secondary-foreground">Please contact your company administrator to activate this workspace.</p>}
+            {role === 'company_admin' ? <Link to="/subscription" className="mt-6 inline-flex h-11 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><ReceiptText className="h-4 w-4" aria-hidden="true" />Choose a subscription</Link> : <p className="mt-6 rounded-lg border border-border bg-secondary px-4 py-3 text-sm text-secondary-foreground">Please contact your company administrator to activate this workspace.</p>}
             <p className="mt-5 text-xs leading-5 text-muted-foreground">After Stripe confirms payment, Rosterly automatically unlocks the workspace and sends a confirmation by email and in-app notification.</p>
         </div>
     </section>;

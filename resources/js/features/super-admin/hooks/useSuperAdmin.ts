@@ -1,36 +1,40 @@
+import { keepPreviousData, useQuery, type UseQueryResult } from '@tanstack/react-query';
+
 import {
-    useMutation,
-    useQuery,
-    useQueryClient,
-    type UseMutationResult,
-    type UseQueryResult,
-} from '@tanstack/react-query';
-import { format, startOfMonth, subMonths } from 'date-fns';
+    apiClient,
+    type ApiSuccessResponse,
+    type PaginatedCollection,
+} from '@/lib/api-client';
+import type { Company, CompanyStatus } from '@/types/company';
 
 import type {
-    CreatePlanInput,
     DistributionTone,
     PlanDistributionSlice,
-    PlanFeature,
+    PlatformAuditDto,
+    PlatformAuditEvent,
+    PlatformBillingMetrics,
     PlatformMetrics,
-    PlatformSettings,
-    RevenuePoint,
-    SetTenantStatusInput,
-    SubscriptionPlan,
-    SubscriptionStatus,
-    TenantCompany,
-    PlanTier,
-    TogglePlanFeatureInput,
-    UpdatePlanPricingInput,
+    PlatformMetricsDto,
+    PlatformOverviewDto,
+    PlatformPayment,
+    PlatformPaymentDto,
+    PlatformSubscription,
+    PlatformSubscriptionDto,
+    RecentCompanyDto,
 } from '@/types/super-admin';
 
 /**
  * Cross-tenant data-access layer for the Super Admin platform module.
  *
- * The platform has no dedicated backend surface yet, so this module owns a
- * deterministic in-memory tenant ledger and exposes it exclusively through
- * TanStack Query hooks. Pages consume the hooks and never touch the store,
- * preserving a strict boundary between presentation and data mutation.
+ * The backend is the source of truth: platform metrics come from
+ * `GET /dashboard/overview` (role-aware) and the company ledger comes from
+ * `GET /companies` (super-admin scope). No in-memory seed data is used —
+ * everything is fetched live from the API (§41).
+ *
+ * Company status toggles are intentionally not defined here: the real
+ * endpoint is `PUT /companies/{id}` with a `{ status }` body, which is already
+ * encapsulated by `useUpdateCompanyStatus` in the companies module. Super-admin
+ * pages reuse that mutation so there is exactly one status-update path.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -40,237 +44,116 @@ import type {
 export const SUPER_ADMIN_KEYS = {
     metrics: ['super-admin', 'metrics'] as const,
     tenants: ['super-admin', 'tenants'] as const,
-    plans: ['super-admin', 'plans'] as const,
+    billing: ['super-admin', 'billing-metrics'] as const,
+    subscriptions: (page: number) => ['super-admin', 'subscriptions', page] as const,
+    payments: (page: number) => ['super-admin', 'payments', page] as const,
+    audit: (page: number) => ['super-admin', 'audit', page] as const,
 } as const;
 
 /* -------------------------------------------------------------------------- */
-/* In-memory store (session-scoped, deterministic)                            */
+/* Transport DTOs (mirror the backend resource shapes)                        */
 /* -------------------------------------------------------------------------- */
 
-interface SuperAdminStore {
-    tenants: TenantCompany[];
-    plans: SubscriptionPlan[];
-    settings: PlatformSettings;
+/** Raw company payload as serialized by `CompanyResource`. */
+interface CompanyDto {
+    id: number;
+    name: string;
+    abn: string | null;
+    email: string | null;
+    phone: string | null;
+    logo: string | null;
+    timezone: string | null;
+    country: string | null;
+    state: string | null;
+    business_type: string | null;
+    status: string | null;
+    subscription_id: number | null;
+    branches_count?: number;
+    employees_count?: number;
+    users_count?: number;
+    created_at: string | null;
+    updated_at: string | null;
 }
 
-/** Australian states cycled across the seed tenants for realism. */
-const AU_STATES = ['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT'] as const;
-
-/** `[name, tier, status, activeStaff]` seed tuples for the tenant ledger. */
-const TENANT_SEED: ReadonlyArray<readonly [string, PlanTier, SubscriptionStatus, number]> = [
-    ['Bondi Beach Hospitality Group', 'enterprise', 'active', 480],
-    ['Melbourne Metro Retail', 'enterprise', 'active', 365],
-    ['Sunshine Coast Care', 'growth', 'active', 96],
-    ['Perth Logistics Co', 'growth', 'active', 132],
-    ['Adelaide Events & Staffing', 'growth', 'trialing', 44],
-    ['Hobart Harbour Cafes', 'free', 'active', 8],
-    ['Canberra Security Services', 'growth', 'past_due', 71],
-    ['Gold Coast Leisure', 'enterprise', 'suspended', 210],
-    ['Darwin Remote Health', 'free', 'active', 6],
-    ['Newcastle Trades Collective', 'growth', 'active', 58],
-];
-
-/** Base + per-seat monthly rate (AUD) that a tier bills at. */
-function tierRate(tier: PlanTier): { base: number; perSeat: number; seatLimit: number } {
-    switch (tier) {
-        case 'enterprise':
-            return { base: 499, perSeat: 5, seatLimit: 1000 };
-        case 'growth':
-            return { base: 149, perSeat: 3, seatLimit: 50 };
+/** Coerce an arbitrary backend status into the UI's status union. */
+function normalizeStatus(raw: string | null | undefined): CompanyStatus {
+    switch (raw) {
+        case 'inactive':
+            return 'inactive';
+        case 'suspended':
+            return 'suspended';
         default:
-            return { base: 0, perSeat: 0, seatLimit: 10 };
+            return 'active';
     }
 }
 
-/** Derives a tenant's billable MRR from its tier and headcount. */
-function tenantMrr(tenant: Pick<TenantCompany, 'tier' | 'activeStaff' | 'status'>): number {
-    if (tenant.status === 'suspended' || tenant.status === 'cancelled') {
-        return 0;
-    }
-    const { base, perSeat } = tierRate(tenant.tier);
-    return base + tenant.activeStaff * perSeat;
-}
-
-/** Converts a company name into a URL-safe slug. */
-function slugify(value: string): string {
-    return value
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/(^-|-$)/g, '');
-}
-
-/** Builds one immutable plan feature row. */
-function feature(id: string, label: string, included: boolean): PlanFeature {
-    return { id, label, included };
-}
-
-/** Seeds the deterministic tenant + plan + settings store exactly once. */
-function seedStore(): SuperAdminStore {
-    const now = Date.now();
-    const day = 86_400_000;
-
-    const tenants: TenantCompany[] = TENANT_SEED.map(([name, tier, status, staff], index) => {
-        const slug = slugify(name);
-        const planName = tier === 'enterprise' ? 'Enterprise' : tier === 'growth' ? 'Growth' : 'Free';
-
-        return {
-            id: `tnt_${index + 1}`,
-            name,
-            slug,
-            contactEmail: `ops@${slug}.com.au`,
-            tier,
-            planName,
-            status,
-            activeStaff: staff,
-            seatLimit: tierRate(tier).seatLimit,
-            mrr: tenantMrr({ tier, activeStaff: staff, status }),
-            state: AU_STATES[index % AU_STATES.length],
-            createdAt: new Date(now - (index + 4) * 30 * day).toISOString(),
-            lastActiveAt: new Date(now - (index % 5) * day).toISOString(),
-        };
-    });
-
-    const countByTier = (tier: PlanTier): number =>
-        tenants.filter((tenant) => tenant.tier === tier).length;
-
-    const plans: SubscriptionPlan[] = [
-        {
-            id: 'plan_free',
-            tier: 'free',
-            name: 'Free',
-            description: 'Get started with core rostering for a single small team.',
-            monthlyPrice: 0,
-            annualPrice: 0,
-            seatLimit: 10,
-            isPublished: true,
-            activeTenants: countByTier('free'),
-            features: [
-                feature('rostering', 'Shift rostering', true),
-                feature('leave', 'Leave management', true),
-                feature('analytics', 'Advanced analytics', false),
-                feature('sso', 'SSO / SAML', false),
-                feature('api', 'API access', false),
-                feature('priority', 'Priority support', false),
-            ],
-        },
-        {
-            id: 'plan_growth',
-            tier: 'growth',
-            name: 'Growth',
-            description: 'Scale scheduling across multiple branches with insights.',
-            monthlyPrice: 149,
-            annualPrice: 1490,
-            seatLimit: 50,
-            isPublished: true,
-            activeTenants: countByTier('growth'),
-            features: [
-                feature('rostering', 'Shift rostering', true),
-                feature('leave', 'Leave management', true),
-                feature('analytics', 'Advanced analytics', true),
-                feature('sso', 'SSO / SAML', false),
-                feature('api', 'API access', true),
-                feature('priority', 'Priority support', false),
-            ],
-        },
-        {
-            id: 'plan_enterprise',
-            tier: 'enterprise',
-            name: 'Enterprise',
-            description: 'Unlimited seats, SSO and dedicated success for large operators.',
-            monthlyPrice: 499,
-            annualPrice: 4990,
-            seatLimit: null,
-            isPublished: true,
-            activeTenants: countByTier('enterprise'),
-            features: [
-                feature('rostering', 'Shift rostering', true),
-                feature('leave', 'Leave management', true),
-                feature('analytics', 'Advanced analytics', true),
-                feature('sso', 'SSO / SAML', true),
-                feature('api', 'API access', true),
-                feature('priority', 'Priority support', true),
-            ],
-        },
-    ];
-
-    const settings: PlatformSettings = {
-        platformName: 'RosterPro',
-        supportEmail: 'support@rosterpro.com.au',
-        defaultTrialDays: 14,
-        signupsEnabled: true,
-        maintenanceMode: false,
-        currency: 'AUD',
+/** Convert a raw {@link CompanyDto} into the stable {@link Company} shape. */
+function mapCompany(dto: CompanyDto): Company {
+    return {
+        id: String(dto.id),
+        name: dto.name,
+        abn: dto.abn,
+        email: dto.email,
+        phone: dto.phone,
+        logo: dto.logo,
+        timezone: dto.timezone,
+        country: dto.country,
+        state: dto.state,
+        businessType: dto.business_type,
+        status: normalizeStatus(dto.status),
+        subscriptionId: dto.subscription_id,
+        branchesCount: dto.branches_count ?? null,
+        employeesCount: dto.employees_count ?? null,
+        usersCount: dto.users_count ?? null,
+        createdAt: dto.created_at,
+        updatedAt: dto.updated_at,
     };
-
-    return { tenants, plans, settings };
-}
-
-let store: SuperAdminStore | null = null;
-
-/** Lazily initialises and returns the singleton store. */
-function getStore(): SuperAdminStore {
-    if (store === null) {
-        store = seedStore();
-    }
-    return store;
 }
 
 /* -------------------------------------------------------------------------- */
-/* Derivations                                                                */
+/* Transport functions                                                        */
 /* -------------------------------------------------------------------------- */
 
-/** Semantic tone applied to each tier in distribution visualisations. */
-const TIER_TONE: Record<PlanTier, DistributionTone> = {
-    free: 'info',
-    growth: 'primary',
-    enterprise: 'success',
-};
+async function fetchPlatformMetrics(): Promise<PlatformMetrics> {
+    const response = await apiClient.get<ApiSuccessResponse<PlatformOverviewDto>>('/dashboard/overview');
 
-/** Aggregates the live store into the platform-wide metrics snapshot. */
-function computeMetrics(current: SuperAdminStore): PlatformMetrics {
-    const activeTenants = current.tenants.filter(
-        (tenant) => tenant.status === 'active' || tenant.status === 'trialing',
-    );
-    const mrr = activeTenants.reduce((sum, tenant) => sum + tenant.mrr, 0);
-    const now = new Date();
+    const dto = response.data.data;
 
-    const trend: RevenuePoint[] = Array.from({ length: 12 }, (_, index) => {
-        const month = startOfMonth(subMonths(now, 11 - index));
-        const factor = 0.55 + (0.45 * index) / 11;
-        const pointMrr = Math.round(mrr * factor);
-        return {
-            month: month.toISOString(),
-            label: format(month, 'MMM'),
-            mrr: pointMrr,
-            arr: pointMrr * 12,
-        };
-    });
+    // Plan distribution: map real plan rows (name + active subscription count).
+    const totalPlanTenants = dto.plan_distribution.reduce((sum, plan) => sum + plan.tenant_count, 0);
+    const tones: DistributionTone[] = ['primary', 'success', 'info', 'warning'];
+    const planDistribution: PlanDistributionSlice[] = dto.plan_distribution.map((plan, index) => ({
+        id: String(plan.id),
+        planName: plan.name,
+        tenantCount: plan.tenant_count,
+        sharePct: totalPlanTenants > 0 ? Math.round((plan.tenant_count / totalPlanTenants) * 100) : 0,
+        tone: tones[index % tones.length],
+    }));
 
-    const previousMrr = trend[trend.length - 2]?.mrr ?? mrr;
-    const growthRatePct =
-        previousMrr === 0 ? 0 : Math.round(((mrr - previousMrr) / previousMrr) * 1000) / 10;
-
-    const totalTenants = current.tenants.length;
-    const planDistribution: PlanDistributionSlice[] = current.plans.map((plan) => {
-        const tenantCount = current.tenants.filter((tenant) => tenant.tier === plan.tier).length;
-        return {
-            tier: plan.tier,
-            planName: plan.name,
-            tenantCount,
-            sharePct: totalTenants === 0 ? 0 : Math.round((tenantCount / totalTenants) * 100),
-            tone: TIER_TONE[plan.tier],
-        };
-    });
+    const { stats } = dto;
 
     return {
-        revenue: { mrr, arr: mrr * 12, growthRatePct, trend },
-        totalTenants,
-        activeTenants: activeTenants.length,
-        suspendedTenants: current.tenants.filter((tenant) => tenant.status === 'suspended').length,
-        employeesScheduled: current.tenants.reduce((sum, tenant) => sum + tenant.activeStaff, 0),
-        systemHealth: current.settings.maintenanceMode ? 'maintenance' : 'operational',
+        stats: {
+            totalCompanies: stats.total_companies,
+            activeCompanies: stats.active_companies,
+            totalEmployees: stats.total_employees,
+            activeSubscriptions: stats.active_subscriptions,
+        },
+        totalTenants: stats.total_companies,
+        activeTenants: stats.active_companies,
+        suspendedTenants: Math.max(0, stats.total_companies - stats.active_companies),
+        employeesScheduled: stats.total_employees,
         planDistribution,
+        recentCompanies: dto.recent_companies ?? [],
     };
+}
+
+async function fetchTenantCompanies(): Promise<Company[]> {
+    const response = await apiClient.get<ApiSuccessResponse<PaginatedCollection<CompanyDto>>>(
+        '/companies',
+        { params: { per_page: 100 } },
+    );
+    return response.data.data.data.map(mapCompany);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -281,139 +164,179 @@ function computeMetrics(current: SuperAdminStore): PlatformMetrics {
 export function usePlatformMetrics(): UseQueryResult<PlatformMetrics, Error> {
     return useQuery<PlatformMetrics, Error>({
         queryKey: SUPER_ADMIN_KEYS.metrics,
-        queryFn: () => Promise.resolve(computeMetrics(getStore())),
+        queryFn: fetchPlatformMetrics,
         staleTime: 15_000,
     });
 }
 
-/** Reads the full tenant-company ledger. */
-export function useTenantCompanies(): UseQueryResult<TenantCompany[], Error> {
-    return useQuery<TenantCompany[], Error>({
+/** Reads the full tenant-company ledger (super-admin scope). */
+export function useTenantCompanies(): UseQueryResult<Company[], Error> {
+    return useQuery<Company[], Error>({
         queryKey: SUPER_ADMIN_KEYS.tenants,
-        queryFn: () => Promise.resolve(getStore().tenants.map((tenant) => ({ ...tenant }))),
-        staleTime: 15_000,
-    });
-}
-
-/** Reads the available subscription plan tiers. */
-export function useSubscriptionPlans(): UseQueryResult<SubscriptionPlan[], Error> {
-    return useQuery<SubscriptionPlan[], Error>({
-        queryKey: SUPER_ADMIN_KEYS.plans,
-        queryFn: () =>
-            Promise.resolve(
-                getStore().plans.map((plan) => ({
-                    ...plan,
-                    features: plan.features.map((item) => ({ ...item })),
-                })),
-            ),
+        queryFn: fetchTenantCompanies,
         staleTime: 15_000,
     });
 }
 
 /* -------------------------------------------------------------------------- */
-/* Mutation hooks                                                             */
+/* Platform billing metrics (MRR / ARR / Revenue / Churn)                     */
 /* -------------------------------------------------------------------------- */
 
-/** Suspends or reactivates a tenant, recomputing billable MRR accordingly. */
-export function useSetTenantStatus(): UseMutationResult<TenantCompany, Error, SetTenantStatusInput> {
-    const queryClient = useQueryClient();
+async function fetchPlatformBillingMetrics(): Promise<PlatformBillingMetrics> {
+    const response = await apiClient.get<ApiSuccessResponse<PlatformMetricsDto>>('/super-admin/metrics');
+    const { metrics } = response.data.data;
+    return {
+        mrr: Number(metrics.mrr),
+        arr: Number(metrics.arr),
+        revenue: Number(metrics.revenue),
+        churnRate: Number(metrics.churn.rate),
+        churnedCount: Number(metrics.churn.churned_count),
+        churnActiveBase: Number(metrics.churn.active_base),
+    };
+}
 
-    return useMutation<TenantCompany, Error, SetTenantStatusInput>({
-        mutationFn: ({ tenantId, status }) => {
-            const target = getStore().tenants.find((tenant) => tenant.id === tenantId);
-            if (!target) {
-                return Promise.reject(new Error('Tenant not found.'));
-            }
-            target.status = status;
-            target.mrr = tenantMrr(target);
-            return Promise.resolve({ ...target });
-        },
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: SUPER_ADMIN_KEYS.tenants });
-            void queryClient.invalidateQueries({ queryKey: SUPER_ADMIN_KEYS.metrics });
-        },
+/** Reads the real MRR/ARR/Revenue/Churn aggregates for the platform dashboard. */
+export function usePlatformBillingMetrics(): UseQueryResult<PlatformBillingMetrics, Error> {
+    return useQuery<PlatformBillingMetrics, Error>({
+        queryKey: SUPER_ADMIN_KEYS.billing,
+        queryFn: fetchPlatformBillingMetrics,
+        staleTime: 30_000,
     });
 }
 
-/** Updates a plan's monthly and annual pricing. */
-export function useUpdatePlanPricing(): UseMutationResult<
-    SubscriptionPlan,
-    Error,
-    UpdatePlanPricingInput
-> {
-    const queryClient = useQueryClient();
+/* -------------------------------------------------------------------------- */
+/* Global subscriptions (platform admin view)                                 */
+/* -------------------------------------------------------------------------- */
 
-    return useMutation<SubscriptionPlan, Error, UpdatePlanPricingInput>({
-        mutationFn: ({ planId, monthlyPrice, annualPrice }) => {
-            const target = getStore().plans.find((plan) => plan.id === planId);
-            if (!target) {
-                return Promise.reject(new Error('Plan not found.'));
-            }
-            target.monthlyPrice = monthlyPrice;
-            target.annualPrice = annualPrice;
-            return Promise.resolve({ ...target, features: target.features.map((f) => ({ ...f })) });
-        },
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: SUPER_ADMIN_KEYS.plans });
-        },
+function mapSubscription(dto: PlatformSubscriptionDto): PlatformSubscription {
+    return {
+        id: String(dto.id),
+        companyId: String(dto.company_id),
+        companyName: dto.company?.name ?? '—',
+        companyStatus: dto.company?.status ?? 'unknown',
+        planId: String(dto.plan_id),
+        planName: dto.plan_name ?? dto.plan?.name ?? '—',
+        status: dto.status,
+        billingCycle: dto.billing_cycle,
+        onTrial: dto.on_trial,
+        isActive: dto.is_active,
+        isCancelled: dto.is_cancelled,
+        startsAt: dto.starts_at,
+        endsAt: dto.ends_at,
+        trialEndsAt: dto.trial_ends_at,
+        cancelledAt: dto.cancelled_at,
+        activeBranchesCount: dto.active_branches_count ?? 0,
+        createdAt: dto.created_at,
+    };
+}
+
+export interface PlatformPage<T> {
+    data: T[];
+    currentPage: number;
+    lastPage: number;
+    total: number;
+}
+
+function mapPage<T, D>(payload: PaginatedCollection<D>, map: (dto: D) => T): PlatformPage<T> {
+    return {
+        data: payload.data.map(map),
+        currentPage: payload.meta.current_page,
+        lastPage: payload.meta.last_page,
+        total: payload.meta.total,
+    };
+}
+
+async function fetchSubscriptions(pageNumber: number): Promise<PlatformPage<PlatformSubscription>> {
+    const response = await apiClient.get<ApiSuccessResponse<PaginatedCollection<PlatformSubscriptionDto>>>(
+        '/super-admin/subscriptions',
+        { params: { per_page: 15, page: pageNumber } },
+    );
+    return mapPage(response.data.data, mapSubscription);
+}
+
+/** Reads the paginated global subscriptions list (super-admin scope). */
+export function usePlatformSubscriptions(pageNumber: number): UseQueryResult<PlatformPage<PlatformSubscription>, Error> {
+    return useQuery<PlatformPage<PlatformSubscription>, Error>({
+        queryKey: SUPER_ADMIN_KEYS.subscriptions(pageNumber),
+        queryFn: () => fetchSubscriptions(pageNumber),
+        placeholderData: keepPreviousData,
+        staleTime: 15_000,
     });
 }
 
-/** Includes or restricts a single feature on a plan. */
-export function useTogglePlanFeature(): UseMutationResult<
-    SubscriptionPlan,
-    Error,
-    TogglePlanFeatureInput
-> {
-    const queryClient = useQueryClient();
+/* -------------------------------------------------------------------------- */
+/* Global payments (platform billing view)                                    */
+/* -------------------------------------------------------------------------- */
 
-    return useMutation<SubscriptionPlan, Error, TogglePlanFeatureInput>({
-        mutationFn: ({ planId, featureId, included }) => {
-            const target = getStore().plans.find((plan) => plan.id === planId);
-            const feat = target?.features.find((item) => item.id === featureId);
-            if (!target || !feat) {
-                return Promise.reject(new Error('Plan feature not found.'));
-            }
-            feat.included = included;
-            return Promise.resolve({ ...target, features: target.features.map((f) => ({ ...f })) });
-        },
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: SUPER_ADMIN_KEYS.plans });
-        },
+function mapPayment(dto: PlatformPaymentDto): PlatformPayment {
+    return {
+        id: String(dto.id),
+        subscriptionId: String(dto.subscription_id),
+        amount: Number(dto.amount ?? 0),
+        amountRefunded: Number(dto.amount_refunded ?? 0),
+        currency: dto.currency,
+        provider: dto.payment_provider,
+        reference: dto.provider_reference,
+        status: dto.status,
+        isRefundable: dto.is_refundable,
+        isRefunded: dto.is_refunded,
+        paidAt: dto.paid_at,
+        refundedAt: dto.refunded_at,
+        companyName: dto.company?.name ?? '—',
+        companyStatus: dto.company?.status ?? 'unknown',
+        planName: dto.plan?.name ?? null,
+    };
+}
+
+async function fetchPayments(pageNumber: number): Promise<PlatformPage<PlatformPayment>> {
+    const response = await apiClient.get<ApiSuccessResponse<PaginatedCollection<PlatformPaymentDto>>>(
+        '/super-admin/payments',
+        { params: { per_page: 15, page: pageNumber } },
+    );
+    return mapPage(response.data.data, mapPayment);
+}
+
+/** Reads the paginated global payments list (super-admin scope). */
+export function usePlatformPayments(pageNumber: number): UseQueryResult<PlatformPage<PlatformPayment>, Error> {
+    return useQuery<PlatformPage<PlatformPayment>, Error>({
+        queryKey: SUPER_ADMIN_KEYS.payments(pageNumber),
+        queryFn: () => fetchPayments(pageNumber),
+        placeholderData: keepPreviousData,
+        staleTime: 15_000,
     });
 }
 
-/** Adds a new platform plan tier to the catalogue. */
-export function useCreatePlan(): UseMutationResult<SubscriptionPlan, Error, CreatePlanInput> {
-    const queryClient = useQueryClient();
+/* -------------------------------------------------------------------------- */
+/* Platform audit log                                                         */
+/* -------------------------------------------------------------------------- */
 
-    return useMutation<SubscriptionPlan, Error, CreatePlanInput>({
-        mutationFn: (input) => {
-            const created: SubscriptionPlan = {
-                id: `plan_${slugify(input.name)}_${Date.now()}`,
-                tier: input.tier,
-                name: input.name,
-                description: input.description,
-                monthlyPrice: input.monthlyPrice,
-                annualPrice: input.annualPrice,
-                seatLimit: input.seatLimit,
-                isPublished: false,
-                activeTenants: 0,
-                features: [
-                    feature('rostering', 'Shift rostering', true),
-                    feature('leave', 'Leave management', true),
-                    feature('analytics', 'Advanced analytics', input.tier !== 'free'),
-                    feature('sso', 'SSO / SAML', input.tier === 'enterprise'),
-                    feature('api', 'API access', input.tier !== 'free'),
-                    feature('priority', 'Priority support', input.tier === 'enterprise'),
-                ],
-            };
-            getStore().plans.push(created);
-            return Promise.resolve({ ...created, features: created.features.map((f) => ({ ...f })) });
-        },
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: SUPER_ADMIN_KEYS.plans });
-            void queryClient.invalidateQueries({ queryKey: SUPER_ADMIN_KEYS.metrics });
-        },
+function mapAudit(dto: PlatformAuditDto): PlatformAuditEvent {
+    return {
+        id: String(dto.id),
+        event: dto.event ?? 'unknown',
+        description: dto.description ?? '',
+        causerName: dto.causer?.name ?? null,
+        subjectType: dto.subject?.type ?? null,
+        companyName: dto.company?.name ?? null,
+        createdAt: dto.created_at,
+    };
+}
+
+async function fetchAudit(pageNumber: number): Promise<PlatformPage<PlatformAuditEvent>> {
+    const response = await apiClient.get<ApiSuccessResponse<PaginatedCollection<PlatformAuditDto>>>(
+        '/super-admin/audit',
+        { params: { per_page: 20, page: pageNumber } },
+    );
+    return mapPage(response.data.data, mapAudit);
+}
+
+/** Reads the paginated platform audit log (super-admin scope). */
+export function usePlatformAudit(pageNumber: number): UseQueryResult<PlatformPage<PlatformAuditEvent>, Error> {
+    return useQuery<PlatformPage<PlatformAuditEvent>, Error>({
+        queryKey: SUPER_ADMIN_KEYS.audit(pageNumber),
+        queryFn: () => fetchAudit(pageNumber),
+        placeholderData: keepPreviousData,
+        staleTime: 15_000,
     });
 }
+

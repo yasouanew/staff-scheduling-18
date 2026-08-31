@@ -12,7 +12,7 @@ use Exception;
  *
  *     {
  *         "success": false,
- *         "message": "This branch has reached its employee capacity.",
+ *         "message": "Employee capacity reached. Contact your company administrator.",
  *         "code": "EMPLOYEE_CAPACITY_REACHED",
  *         "errors": { "used": 25, "capacity": 25 }
  *     }

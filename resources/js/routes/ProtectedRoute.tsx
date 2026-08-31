@@ -28,9 +28,11 @@ export function ProtectedRoute(): JSX.Element {
         return <Navigate to="/login" replace state={{ from: location }} />;
     }
 
-    const isSubscriptionActivationRoute = /^\/companies\/[^/]+\/subscriptions$/.test(location.pathname);
+    // A locked company may still reach the self-service Subscription & Billing
+    // experience (`/subscription`) to reactivate or update payment details.
+    const isBillingRoute = location.pathname === '/subscription';
 
-    if (session.data?.company_access?.is_locked && location.pathname !== '/account-locked' && !isSubscriptionActivationRoute) {
+    if (session.data?.company_access?.is_locked && location.pathname !== '/account-locked' && !isBillingRoute) {
         return <Navigate to="/account-locked" replace state={{ from: location }} />;
     }
 

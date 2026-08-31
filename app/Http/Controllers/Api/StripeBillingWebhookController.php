@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\User;
 use App\Models\WebhookEvent;
@@ -185,6 +186,14 @@ class StripeBillingWebhookController extends Controller
             default => 'past_due',
         };
 
+        // Reconcile the local plan against the provider's actual price. The
+        // provider is the source of truth for what the customer is being
+        // charged, so a plan/billing-cycle change is only ever applied locally
+        // once it is confirmed in the subscription object's line items. This
+        // keeps the local row converged on the provider even if an upgrade or
+        // downgrade request and its webhook arrive out of order.
+        $this->reconcilePlanFromProvider($subscription, $object);
+
         if ($status === 'active') {
             $this->lifecycle->markPaid(
                 $subscription,
@@ -239,6 +248,71 @@ class StripeBillingWebhookController extends Controller
             'currency' => is_string($object->currency ?? null) ? $object->currency : 'AUD',
             'payment_intent' => is_string($object->payment_intent ?? null) ? $object->payment_intent : null,
         ];
+    }
+
+    /**
+     * Reconcile the local plan and billing cycle from the provider's price.
+     *
+     * The Stripe subscription object's first line item carries the price the
+     * customer is actually being charged. We resolve that price back to a local
+     * plan (by any of the three per-cycle price ids) and, when it differs from
+     * the local row, converge the local state. This is what keeps the local
+     * subscription in sync with Stripe for upgrades / downgrades / billing-cycle
+     * changes — the provider is authoritative for what was actually charged.
+     *
+     * Unknown prices are ignored (a plan may have been retired); local state is
+     * never guessed.
+     */
+    private function reconcilePlanFromProvider(Subscription $subscription, object $object): void
+    {
+        $priceId = $this->firstPriceId($object);
+
+        if (! is_string($priceId) || $priceId === '') {
+            return;
+        }
+
+        $plan = Plan::query()
+            ->where('stripe_monthly_price_id', $priceId)
+            ->orWhere('stripe_six_monthly_price_id', $priceId)
+            ->orWhere('stripe_yearly_price_id', $priceId)
+            ->first();
+
+        if (! $plan) {
+            return;
+        }
+
+        $cycle = match (true) {
+            $plan->stripe_monthly_price_id === $priceId => 'monthly',
+            $plan->stripe_six_monthly_price_id === $priceId => 'six_month',
+            $plan->stripe_yearly_price_id === $priceId => 'yearly',
+            default => $subscription->billing_cycle,
+        };
+
+        if ($subscription->plan_id === $plan->id && $subscription->billing_cycle === $cycle) {
+            return;
+        }
+
+        $subscription->update([
+            'plan_id' => $plan->id,
+            'billing_cycle' => $cycle,
+            'stripe_price' => $priceId,
+        ]);
+    }
+
+    /**
+     * Extract the price id from the subscription object's first line item.
+     */
+    private function firstPriceId(object $object): ?string
+    {
+        $items = $object->items ?? null;
+
+        if (! is_object($items) || ! is_array($items->data ?? null) || count($items->data) === 0) {
+            return null;
+        }
+
+        $price = $items->data[0]->price ?? null;
+
+        return is_object($price) && is_string($price->id ?? null) ? $price->id : null;
     }
 
     /**

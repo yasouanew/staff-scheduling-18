@@ -150,6 +150,18 @@ class StripeBillingProvider implements BillingProvider
         ]);
     }
 
+    public function billingPortal(User $user, ?string $returnUrl = null): string
+    {
+        $user->createOrGetStripeCustomer();
+
+        $session = Cashier::stripe()->billingPortal->sessions->create([
+            'customer' => $user->stripe_id,
+            'return_url' => $returnUrl ?? rtrim((string) config('app.frontend_url', config('app.url')), '/'),
+        ]);
+
+        return (string) $session->url;
+    }
+
     public function refund(User $user, string $paymentIntentId, float $amount): array
     {
         $refund = Cashier::stripe()->refunds->create([

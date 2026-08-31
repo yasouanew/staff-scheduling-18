@@ -52,7 +52,7 @@ class CheckCompanyAccess
         return response()->json([
             'success' => false,
             'message' => 'Your trial has ended. Activate a subscription to continue using Rosterly.',
-            'code' => 'company_subscription_required',
+            'code' => 'SUBSCRIPTION_REQUIRED',
             'data' => [
                 'is_locked' => true,
                 'trial_ends_at' => $company->trial_ends_at?->toIso8601String(),

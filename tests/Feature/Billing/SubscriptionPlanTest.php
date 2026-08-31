@@ -530,6 +530,51 @@ class SubscriptionPlanTest extends TestCase
 
     /*
     |--------------------------------------------------------------------------
+    | POST /api/v1/subscription/billing-period
+    |--------------------------------------------------------------------------
+    */
+
+    public function test_company_admin_can_change_billing_period_without_changing_plan(): void
+    {
+        [$company, $plan, $subscription] = $this->makeCompanyWithActiveSubscription();
+        $this->actingAsCompanyAdmin($company);
+
+        $this->postJson('/api/v1/subscription/billing-period', [
+            'billing_cycle' => 'yearly',
+        ])
+            ->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.subscription.billing_cycle', 'yearly');
+
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $subscription->id,
+            'plan_id' => $plan->id,
+            'billing_cycle' => 'yearly',
+        ]);
+    }
+
+    public function test_billing_period_requires_a_valid_cycle(): void
+    {
+        [$company] = $this->makeCompanyWithActiveSubscription();
+        $this->actingAsCompanyAdmin($company);
+
+        $this->postJson('/api/v1/subscription/billing-period', [
+            'billing_cycle' => 'fortnightly',
+        ])->assertUnprocessable()->assertJsonValidationErrors('billing_cycle');
+    }
+
+    public function test_employee_cannot_change_billing_period(): void
+    {
+        [$company] = $this->makeCompanyWithActiveSubscription();
+        $this->actingAsEmployee($company);
+
+        $this->postJson('/api/v1/subscription/billing-period', [
+            'billing_cycle' => 'yearly',
+        ])->assertForbidden();
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | POST /api/v1/subscription/cancel
     |--------------------------------------------------------------------------
     */

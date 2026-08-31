@@ -1,7 +1,7 @@
 import { AlertTriangle, CalendarClock, Clock3, Plus, Users, UserCheck, UserRoundX } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { useMemo, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { StatCard } from '@/Components/common/StatCard';
@@ -9,7 +9,7 @@ import { useBranches } from '@/features/branches/hooks/useBranches';
 import { useEmployees } from '@/features/employees/hooks/useEmployees';
 import { usePositions } from '@/features/positions/hooks/usePositions';
 import { useRosters } from '@/features/rosters/hooks/useRosters';
-import { getApiErrorMessage } from '@/lib/api-client';
+import { schedulingErrorMessage } from '@/lib/scheduling-errors';
 import { cn } from '@/lib/utils';
 import type { Shift, ShiftMutationInput, ShiftStatus } from '@/types/shift';
 
@@ -43,13 +43,13 @@ function formatRosterLabel(weekStart: string | null, weekEnd: string | null, bra
     return branchName ? `${range} · ${branchName}` : range;
 }
 
-/** Shift-management page at `/shifts`, with `/shifts/create` opening the same form drawer. */
+/** Shift-management page at `/shifts`. The create/edit form opens as an inline drawer. */
 export default function ShiftsListPage(): JSX.Element {
     const navigate = useNavigate();
-    const location = useLocation();
     const [branchId, setBranchId] = useState(ALL_VALUE);
     const [status, setStatus] = useState<ShiftStatus | typeof ALL_VALUE>(ALL_VALUE);
     const [dateFrom, setDateFrom] = useState('');
+    const [formOpen, setFormOpen] = useState(false);
     const [editingShift, setEditingShift] = useState<Shift | null>(null);
     const [assigningShift, setAssigningShift] = useState<Shift | null>(null);
 
@@ -72,8 +72,7 @@ export default function ShiftsListPage(): JSX.Element {
     const shifts = useMemo(() => shiftQuery.data ?? [], [shiftQuery.data]);
     const employees = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
     const stats = useMemo(() => deriveShiftStats(shifts), [shifts]);
-    const isCreateRoute = location.pathname === '/shifts/create';
-    const isFormOpen = isCreateRoute || editingShift !== null;
+    const isFormOpen = formOpen || editingShift !== null;
     const isReferenceLoading =
         rostersQuery.isLoading || employeesQuery.isLoading || positionsQuery.isLoading || branchesQuery.isLoading;
 
@@ -107,7 +106,7 @@ export default function ShiftsListPage(): JSX.Element {
     const handleFormOpenChange = (open: boolean): void => {
         if (!open) {
             setEditingShift(null);
-            navigate('/shifts', { replace: isCreateRoute });
+            setFormOpen(false);
         }
     };
 
@@ -129,7 +128,7 @@ export default function ShiftsListPage(): JSX.Element {
             navigate('/shifts', { replace: true });
         } catch (error) {
             toast.error('Unable to save shift', {
-                description: getApiErrorMessage(error, 'Review the details and try again.'),
+                description: schedulingErrorMessage(error, 'Review the details and try again.'),
             });
         }
     };
@@ -142,7 +141,7 @@ export default function ShiftsListPage(): JSX.Element {
                 }),
             onError: (error) =>
                 toast.error('Unable to delete shift', {
-                    description: getApiErrorMessage(error, 'Please try again.'),
+                    description: schedulingErrorMessage(error, 'Please try again.'),
                 }),
         });
     };
@@ -160,7 +159,7 @@ export default function ShiftsListPage(): JSX.Element {
             setAssigningShift(null);
         } catch (error) {
             toast.error('Unable to assign employee', {
-                description: getApiErrorMessage(error, 'Please try again.'),
+                description: schedulingErrorMessage(error, 'Please try again.'),
             });
         }
     };
@@ -179,7 +178,10 @@ export default function ShiftsListPage(): JSX.Element {
                 </div>
                 <button
                     type="button"
-                    onClick={() => navigate('/shifts/create')}
+                    onClick={() => {
+                        setEditingShift(null);
+                        setFormOpen(true);
+                    }}
                     disabled={isReferenceLoading}
                     className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60"
                 >

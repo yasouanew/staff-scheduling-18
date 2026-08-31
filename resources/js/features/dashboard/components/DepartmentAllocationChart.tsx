@@ -7,7 +7,6 @@ import {
     CHART_HEIGHT,
     CHART_TOOLTIP_CLASS,
     chartToneToVar,
-    formatHours,
     formatPercent,
 } from '@/lib/chart';
 import { cn } from '@/lib/utils';
@@ -63,12 +62,6 @@ function DepartmentTooltip({ active, payload, totalShifts }: DepartmentTooltipPr
                     <span className="text-muted-foreground">Shifts</span>
                     <span className="font-medium text-popover-foreground">
                         {slice.shiftCount} · {formatPercent(share)}
-                    </span>
-                </div>
-                <div className="flex items-center justify-between gap-6">
-                    <span className="text-muted-foreground">Hours</span>
-                    <span className="font-medium text-popover-foreground">
-                        {formatHours(slice.hours)}
                     </span>
                 </div>
             </div>

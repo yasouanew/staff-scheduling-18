@@ -65,7 +65,7 @@ class EnsureFeatureAccess
             return response()->json([
                 'success' => false,
                 'message' => 'Your current plan does not include access to this feature.',
-                'code' => 'feature_not_available',
+                'code' => 'FEATURE_NOT_AVAILABLE',
             ], 403);
         }
 

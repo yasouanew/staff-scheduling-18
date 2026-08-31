@@ -248,12 +248,13 @@ class RosterChangeService
 
             case 'cancel':
                 if ($shift !== null) {
-                    // Cancelling genuinely removes the shift from the roster.
-                    // The cancellation is still recorded as an audit row (with
-                    // the shift's id + before snapshot) so the history and the
-                    // per-employee notification remain intact; `roster_changes`
-                    // nulls its `shift_id` via `ON DELETE SET NULL`.
+                    // Soft-cancel: mark the shift cancelled and persist it so it
+                    // stays visible (greyed out) in the roster grid. The
+                    // cancellation is recorded as an audit row (with the shift's
+                    // id + before snapshot) so the history and the per-employee
+                    // notification remain intact.
                     $data['status'] = 'cancelled';
+                    $shift->update($data);
                     $isCancel = true;
                 }
                 break;
@@ -274,9 +275,9 @@ class RosterChangeService
         }
 
         // Detect against the applied state. For a cancellation the "after" is
-        // the shift marked cancelled (never persisted), so detection is run
-        // against the synthetic cancelled snapshot — this yields the same
-        // ShiftCancelled record the preview reported.
+        // the shift marked cancelled, but detection is run against the
+        // synthetic cancelled snapshot (with unchanged fields carried over) so
+        // it yields exactly the ShiftCancelled record the preview reported.
         $after = $isCancel ? null : ($shift !== null ? $shift->fresh() : null);
 
         // Mirror detectForMutation(): carry the current shift's unchanged
@@ -325,13 +326,6 @@ class RosterChangeService
                 'created_at' => optional($record->created_at)->toIso8601String(),
             ];
         });
-
-        // Hard-delete a cancelled shift only after its audit record has been
-        // written (the FK nulls `roster_changes.shift_id` on delete, so the
-        // history + notification snapshots are preserved).
-        if ($isCancel && $shift !== null) {
-            $shift->delete();
-        }
 
         return [$records, $ids];
     }

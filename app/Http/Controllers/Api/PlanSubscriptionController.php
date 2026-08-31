@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Enums\Feature;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Billing\ChangeSubscriptionPlanRequest;
+use App\Http\Resources\SubscriptionPaymentResource;
+use App\Http\Resources\SubscriptionResource;
 use App\Http\Resources\SubscriptionSummaryResource;
 use App\Models\Company;
 use App\Models\Plan;
@@ -30,9 +32,21 @@ use Illuminate\Http\Request;
  *   GET    subscription/plans      → the active plan catalogue (billing values)
  *   GET    subscription/usage      → branch + per-branch employee usage
  *   GET    subscription/features   → feature access for the current plan
+ *   POST   subscription/checkout   → open a hosted Stripe Checkout session
  *   POST   subscription/upgrade    → switch to a larger / equal plan
  *   POST   subscription/downgrade  → switch to a smaller plan (usage-validated)
  *   POST   subscription/cancel     → cancel the subscription
+ *   POST   subscription/resume     → resume a cancelled subscription
+ *   POST   subscription/billing-period → change only the billing cycle
+ *   POST   subscription/billing-portal → open the Stripe Customer Portal
+ *   GET    subscription/payments   → the business's payment history
+ *   GET    subscription/invoices   → the business's invoice history (payment rows)
+ *
+ * The whole self-service billing surface is intentionally registered outside
+ * the `company.access` middleware so a locked company can still reach it to
+ * reactivate (mirroring how the frontend allows `/subscription` for locked
+ * companies). Permissions are enforced per-ability through SubscriptionPolicy,
+ * never by route placement.
  *
  * Reads are guarded by `subscription.view`; mutations by `subscription.manage`
  * (both enforced through the existing SubscriptionPolicy). Employees and
@@ -59,7 +73,7 @@ class PlanSubscriptionController extends Controller
 
         $this->authorize('viewAny', [Subscription::class, $company]);
 
-        $subscription = $this->entitlements->entitledSubscription($company);
+        $subscription = $this->subscriptionService->entitledSubscription($company);
 
         return $this->successResponse(
             new SubscriptionSummaryResource($subscription),
@@ -232,6 +246,36 @@ class PlanSubscriptionController extends Controller
     }
 
     /**
+     * Change only the billing cycle while keeping the current plan.
+     *
+     * Routes through {@see SubscriptionService::changeBillingPeriod()} (and thus
+     * the same validated plan-change path as upgrade/downgrade), so the cycle
+     * change is reconciled with Stripe and never bypasses the domain rules.
+     */
+    public function billingPeriod(Request $request): JsonResponse
+    {
+        $company = $this->resolveCompany($request);
+        $subscription = $this->requireSubscription($company);
+
+        $this->authorize('update', [$subscription, $company]);
+
+        $validated = $request->validate([
+            'billing_cycle' => ['required', 'in:monthly,six_month,yearly'],
+        ]);
+
+        $subscription = $this->subscriptionService->changeBillingPeriod(
+            $subscription,
+            $validated['billing_cycle'],
+            $request->user(),
+        );
+
+        return $this->successResponse(
+            new SubscriptionSummaryResource($subscription),
+            'Subscription billing period updated successfully.'
+        );
+    }
+
+    /**
      * Cancel the business's subscription.
      *
      * Cancels at the end of the current billing period by default; pass
@@ -253,6 +297,140 @@ class PlanSubscriptionController extends Controller
             new SubscriptionSummaryResource($subscription),
             'Subscription cancelled successfully.'
         );
+    }
+
+    /**
+     * Open the Stripe Customer Portal for the business.
+     *
+     * The portal lets the company admin self-serve payment-method changes,
+     * invoice history and card updates. Subscription / entitlement state stays
+     * authoritative in the local application; the portal only manages the
+     * payment relationship.
+     */
+    public function billingPortal(Request $request): JsonResponse
+    {
+        $company = $this->resolveCompany($request);
+        $subscription = $this->requireSubscription($company);
+
+        $this->authorize('update', [$subscription, $company]);
+
+        try {
+            $portalUrl = $this->subscriptionService->billingPortal($company, $request->user());
+        } catch (\RuntimeException $e) {
+            return $this->errorResponse($e->getMessage(), 422);
+        }
+
+        return $this->successResponse(['url' => $portalUrl], 'Billing portal session created successfully.');
+    }
+
+    /**
+     * Start a hosted Stripe Checkout session to subscribe (or reactivate) the
+     * business.
+     *
+     * This is the primary reactivation path for a locked company, which is why
+     * the route lives outside `company.access`. Plan, cycle and pricing are
+     * resolved from the database; {@see SubscriptionService::startCheckout()}
+     * pre-flights a plan change so a checkout can never bypass the branch /
+     * employee allowance validation.
+     */
+    public function checkout(Request $request): JsonResponse
+    {
+        $company = $this->resolveCompany($request);
+
+        $this->authorize('create', [Subscription::class, $company]);
+
+        $validated = $request->validate([
+            'plan_id' => ['required', 'integer', 'exists:plans,id'],
+            'billing_cycle' => ['required', 'in:monthly,six_month,yearly'],
+            'trial_days' => ['nullable', 'integer', 'min:1', 'max:365'],
+        ]);
+
+        $plan = Plan::findOrFail($validated['plan_id']);
+
+        try {
+            $checkout = $this->subscriptionService->startCheckout(
+                $company,
+                $request->user(),
+                $plan,
+                $validated['billing_cycle'],
+                $validated['trial_days'] ?? null,
+            );
+        } catch (\RuntimeException $e) {
+            return $this->errorResponse($e->getMessage(), 422);
+        }
+
+        return $this->successResponse([
+            'subscription' => new SubscriptionResource($checkout['subscription']->load('plan')),
+            'checkout_url' => $checkout['checkout_url'],
+            'checkout_session_id' => $checkout['checkout_session_id'],
+        ], 'Stripe Checkout session created successfully.', 201);
+    }
+
+    /**
+     * Resume a cancelled subscription.
+     *
+     * A cancelled subscription is no longer "entitled" (so it can't be found
+     * through the entitlement resolution), so we resolve the business's most
+     * recent cancelled subscription directly. {@see SubscriptionService::resume()}
+     * reconciles the state with Stripe when the subscription is provider-backed.
+     */
+    public function resume(Request $request): JsonResponse
+    {
+        $company = $this->resolveCompany($request);
+
+        $subscription = $company->subscriptions()
+            ->whereNotNull('cancelled_at')
+            ->latest()
+            ->first();
+
+        abort_unless($subscription, 404, 'No cancelled subscription exists for this business.');
+
+        $this->authorize('update', [$subscription, $company]);
+
+        $subscription = $this->subscriptionService->resume($subscription);
+
+        return $this->successResponse(
+            new SubscriptionSummaryResource($subscription),
+            'Subscription resumed successfully.'
+        );
+    }
+
+    /**
+     * The business's payment history (paginated).
+     *
+     * Scoped to the caller's own company and entitled subscription, mirroring
+     * the explicit-company `companies/{company}/subscriptions/{id}/payments`
+     * surface used by the super-admin platform.
+     */
+    public function payments(Request $request): JsonResponse
+    {
+        $company = $this->resolveCompany($request);
+        $subscription = $this->requireSubscription($company);
+
+        $this->authorize('view', [$subscription, $company]);
+
+        $payments = $subscription->payments()
+            ->latest()
+            ->paginate($request->integer('per_page', 15))
+            ->withQueryString();
+
+        return $this->successResponse(
+            SubscriptionPaymentResource::collection($payments)->response()->getData(true),
+            'Payments retrieved successfully.'
+        );
+    }
+
+    /**
+     * The business's invoice history.
+     *
+     * There is no separate invoice store — every paid / pending / failed charge
+     * is a local `subscription_payments` row, so invoices are the same records
+     * surfaced through {@see self::payments()}. Kept as a distinct endpoint for
+     * a complete, self-describing billing surface.
+     */
+    public function invoices(Request $request): JsonResponse
+    {
+        return $this->payments($request);
     }
 
     /**
@@ -278,7 +456,7 @@ class PlanSubscriptionController extends Controller
      */
     protected function requireSubscription(Company $company): Subscription
     {
-        $subscription = $this->entitlements->entitledSubscription($company);
+        $subscription = $this->subscriptionService->entitledSubscription($company);
 
         abort_unless($subscription, 404, 'No active subscription exists for this business.');
 

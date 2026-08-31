@@ -27,7 +27,7 @@ import {
     useDeleteShift,
     useUpdateShift,
 } from '@/features/shifts/hooks/useShifts';
-import { getApiErrorMessage } from '@/lib/api-client';
+import { schedulingErrorMessage } from '@/lib/scheduling-errors';
 import { cn } from '@/lib/utils';
 import type { Roster, RosterGridRow, RosterShift } from '@/types/roster-management';
 
@@ -286,7 +286,7 @@ export function RosterDetailPage(): JSX.Element {
                 }),
             onError: (error) =>
                 toast.error('Unable to publish roster', {
-                    description: getApiErrorMessage(error, 'Please try again.'),
+                    description: schedulingErrorMessage(error, 'Please try again.'),
                 }),
         });
     };
@@ -301,7 +301,7 @@ export function RosterDetailPage(): JSX.Element {
             },
             onError: (error) =>
                 toast.error('Unable to delete roster', {
-                    description: getApiErrorMessage(error, 'Please try again.'),
+                    description: schedulingErrorMessage(error, 'Please try again.'),
                 }),
         });
     };
@@ -467,7 +467,7 @@ export function RosterDetailPage(): JSX.Element {
             setQuickTarget(null);
         } catch (error) {
             toast.error(target.shiftId ? 'Unable to update shift' : 'Unable to add shift', {
-                description: getApiErrorMessage(error, 'Please try again.'),
+                description: schedulingErrorMessage(error, 'Please try again.'),
             });
         }
     };
@@ -494,7 +494,7 @@ export function RosterDetailPage(): JSX.Element {
             },
             onError: (error) =>
                 toast.error('Unable to delete shift', {
-                    description: getApiErrorMessage(error, 'Please try again.'),
+                    description: schedulingErrorMessage(error, 'Please try again.'),
                 }),
         });
     };
@@ -539,7 +539,7 @@ export function RosterDetailPage(): JSX.Element {
             })
             .catch((error: unknown) => {
                 toast.error('Unable to remove employee', {
-                    description: getApiErrorMessage(error, 'Please try again.'),
+                    description: schedulingErrorMessage(error, 'Please try again.'),
                 });
             });
     };

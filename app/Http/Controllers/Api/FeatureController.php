@@ -85,7 +85,7 @@ class FeatureController extends Controller
         return response()->json([
             'success' => false,
             'message' => 'Your current plan does not include access to this feature.',
-            'code' => 'feature_not_available',
+            'code' => 'FEATURE_NOT_AVAILABLE',
             'data' => ['feature' => $feature],
         ], 403);
     }

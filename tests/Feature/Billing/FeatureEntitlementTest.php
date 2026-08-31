@@ -116,7 +116,7 @@ class FeatureEntitlementTest extends TestCase
         // Advanced reporting is not enabled on this plan.
         $this->getJson('/api/v1/entitlements/reporting')
             ->assertForbidden()
-            ->assertJsonPath('code', 'feature_not_available');
+            ->assertJsonPath('code', 'FEATURE_NOT_AVAILABLE');
     }
 
     public function test_feature_middleware_allows_enabled_feature(): void
@@ -145,7 +145,7 @@ class FeatureEntitlementTest extends TestCase
 
         $this->getJson('/api/v1/entitlements/reporting')
             ->assertForbidden()
-            ->assertJsonPath('code', 'feature_not_available');
+            ->assertJsonPath('code', 'FEATURE_NOT_AVAILABLE');
     }
 
     public function test_super_admin_bypasses_feature_middleware(): void

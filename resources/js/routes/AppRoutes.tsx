@@ -49,10 +49,13 @@ import NotificationCenterPage from '@/features/notifications/pages/NotificationC
 import { SettingsDashboardPage } from '@/features/settings/pages/SettingsDashboardPage';
 import SuperAdminDashboard from '@/features/super-admin/pages/SuperAdminDashboard';
 import CompanyManagementPage from '@/features/super-admin/pages/CompanyManagementPage';
+import SuperAdminCompanyDetailPage from '@/features/super-admin/pages/SuperAdminCompanyDetailPage';
+import SuperAdminSubscriptionsPage from '@/features/super-admin/pages/SuperAdminSubscriptionsPage';
+import SuperAdminPaymentsPage from '@/features/super-admin/pages/SuperAdminPaymentsPage';
+import SuperAdminAuditPage from '@/features/super-admin/pages/SuperAdminAuditPage';
+import SuperAdminPlatformSettingsPage from '@/features/super-admin/pages/SuperAdminPlatformSettingsPage';
 import PlansPage from '@/features/billing/pages/PlansPage';
-import CompanySubscriptionsPage from '@/features/billing/pages/CompanySubscriptionsPage';
 import { LockedCompanyPage } from '@/features/billing/pages/LockedCompanyPage';
-import SubscriptionPaymentsPage from '@/features/billing/pages/SubscriptionPaymentsPage';
 import SubscriptionDashboardPage from '@/features/billing/pages/SubscriptionDashboardPage';
 
 import CompaniesListPage from '@/features/companies/pages/CompaniesListPage';
@@ -386,38 +389,36 @@ export function AppRoutes(): JSX.Element {
                     <Route element={<RoleRoute roles={['super_admin']} />}>
                         <Route path="/super-admin" element={<SuperAdminDashboard />} />
                         <Route path="/super-admin/companies" element={<CompanyManagementPage />} />
+                        <Route path="/super-admin/companies/:id" element={<SuperAdminCompanyDetailPage />} />
                         <Route path="/super-admin/plans" element={<PlansPage />} />
-                        <Route path="/plans" element={<PlansPage />} />
+                        <Route path="/super-admin/subscriptions" element={<SuperAdminSubscriptionsPage />} />
+                        <Route path="/super-admin/payments" element={<SuperAdminPaymentsPage />} />
+                        <Route path="/super-admin/audit" element={<SuperAdminAuditPage />} />
+                        <Route path="/super-admin/settings" element={<SuperAdminPlatformSettingsPage />} />
                     </Route>
 
                     <Route element={<RoleRoute roles={['company_admin']} />}>
                         <Route path="/subscription" element={<SubscriptionDashboardPage />} />
                         <Route path="/companies" element={<CompaniesListPage />} />
                         <Route path="/companies/:id" element={<CompanyDetailPage />} />
-                        <Route path="/companies/:id/subscriptions" element={<CompanySubscriptionsPage />} />
-                        <Route path="/companies/:company/subscriptions/:subscription/payments" element={<SubscriptionPaymentsPage />} />
                         <Route path="/companies/:id/settings" element={<CompanySettingsPage />} />
-                        <Route path="/employees" element={<EmployeeListPage />} />
-                        <Route path="/employees/:id/availability" element={<EmployeeAvailabilityPage />} />
                         <Route path="/branches" element={<BranchesListPage />} />
                         <Route path="/branches/:id" element={<BranchDetailPage />} />
                         <Route path="/departments" element={<DepartmentsListPage />} />
                         <Route path="/positions" element={<PositionsListPage />} />
-                        <Route path="/availability" element={<AvailabilityDashboard />} />
                         <Route path="/leave-types" element={<LeaveTypesPage />} />
                         <Route path="/leave-requests/new" element={<LeaveRequestNewPage />} />
                         <Route path="/settings" element={<SettingsDashboardPage />} />
                     </Route>
 
                     <Route element={<RoleRoute roles={['company_admin', 'scheduler']} />}>
+                        <Route path="/employees" element={<EmployeeListPage />} />
+                        <Route path="/employees/:id/availability" element={<EmployeeAvailabilityPage />} />
+                        <Route path="/availability" element={<AvailabilityDashboard />} />
                         <Route path="/rosters" element={<RosterCalendarPage />} />
-                        <Route path="/rosters/calendar" element={<RosterCalendarPage />} />
                         <Route path="/rosters/list" element={<RostersListPage />} />
-                        <Route path="/rouster" element={<RosterCalendarPage />} />
-                        <Route path="/roster" element={<RosterCalendarPage />} />
                         <Route path="/rosters/:id" element={<RosterDetailPage />} />
                         <Route path="/shifts" element={<ShiftsListPage />} />
-                        <Route path="/shifts/create" element={<ShiftsListPage />} />
                         <Route path="/leave-requests" element={<LeaveRequestsListPage />} />
                         <Route path="/leave-requests/:id" element={<LeaveRequestDetailPage />} />
                     </Route>
