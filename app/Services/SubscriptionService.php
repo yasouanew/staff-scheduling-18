@@ -9,6 +9,7 @@ use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\SubscriptionPayment;
 use App\Models\User;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -115,9 +116,12 @@ class SubscriptionService
                 'quantity' => 1,
             ]);
 
-            $baseUrl = rtrim((string) config('app.frontend_url', config('app.url')), '/');
-            $successUrl = $baseUrl.'/companies/'.$company->id.'/subscriptions?checkout=success&session_id={CHECKOUT_SESSION_ID}';
-            $cancelUrl = $baseUrl.'/companies/'.$company->id.'/subscriptions?checkout=cancelled';
+            $baseUrl = rtrim((string) $this->checkoutReturnBaseUrl(), '/');
+            // The SPA hosts the self-service subscription dashboard at `/subscription`
+            // (there is no `/companies/{id}/subscriptions` route). The query string
+            // tells the page to confirm the Stripe Checkout session server-side.
+            $successUrl = $baseUrl.'/subscription?checkout=success&session_id={CHECKOUT_SESSION_ID}';
+            $cancelUrl = $baseUrl.'/subscription?checkout=cancelled';
 
             $checkout = $this->billing->startCheckout(
                 user: $user,
@@ -468,8 +472,32 @@ class SubscriptionService
      */
     protected function billingPortalReturnUrl(Company $company): string
     {
-        $baseUrl = rtrim((string) config('app.frontend_url', config('app.url')), '/');
+        $baseUrl = rtrim((string) $this->checkoutReturnBaseUrl(), '/');
 
-        return $baseUrl.'/companies/'.$company->id.'/subscriptions?portal=return';
+        // The SPA's subscription self-service page lives at `/subscription`.
+        return $baseUrl.'/subscription?portal=return';
+    }
+
+    /**
+     * The origin that hosts the SPA's self-service subscription dashboard.
+     *
+     * Prefers the configured frontend origin (used to build the Stripe
+     * Checkout / Customer Portal return URLs), but when the frontend is served
+     * by the same Laravel process — e.g. `php artisan serve` with no separate
+     * Vite host — it falls back to the actual request origin so the return
+     * always points at the browser's current host/port (localhost:8000,
+     * 127.0.0.1:8000, a .test vhost, etc.) rather than a stale config value.
+     */
+    protected function checkoutReturnBaseUrl(): string
+    {
+        $configured = (string) config('app.frontend_url', '');
+
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        $request = app(Request::class);
+
+        return $request->getSchemeAndHttpHost();
     }
 }

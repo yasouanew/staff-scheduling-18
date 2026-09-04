@@ -9,13 +9,26 @@ async function fetchWebSession(): Promise<AuthUser> {
     return response.data.data;
 }
 
-/** Returns the authoritative authenticated user for browser role and route gating. */
+/**
+ * Returns the authoritative authenticated user for browser role and route gating.
+ *
+ * `company_access.is_locked` is decided entirely by the server clock. To make
+ * sure a client cannot keep a stale "unlocked" UI after its device clock is
+ * changed, this query always revalidates against the server:
+ *  - on window focus and network reconnect (overriding the global app default),
+ *  - on a periodic poll while the tab is open.
+ * The server never trusts any client timestamp, so each revalidation is a
+ * ground-truth answer computed from the server clock.
+ */
 export function useWebSession(enabled = true): UseQueryResult<AuthUser, Error> {
     return useQuery<AuthUser, Error>({
         queryKey: WEB_SESSION_KEY,
         queryFn: fetchWebSession,
         enabled,
-        staleTime: 60_000,
+        staleTime: 30_000,
+        refetchOnWindowFocus: true,
+        refetchOnReconnect: true,
+        refetchInterval: 60_000,
         retry: false,
     });
 }

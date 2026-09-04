@@ -24,6 +24,7 @@ import { ErrorAlert } from '@/Components/common/ErrorAlert';
 import { LoadingSkeleton } from '@/Components/common/LoadingSkeleton';
 import { StatCard } from '@/Components/common/StatCard';
 import { StatusBadge } from '@/Components/common/StatusBadge';
+import { normalizeWebRole, useWebSession } from '@/features/auth/hooks/useWebSession';
 import { useEmployee } from '@/features/employees/hooks/useEmployees';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { getApiErrorMessage } from '@/lib/api-client';
@@ -263,6 +264,15 @@ function EmployeeAvailabilityPage(): JSX.Element {
 
     const isDesktop = useMediaQuery('(min-width: 1024px)');
 
+    // Schedulers have employee.view (read) but lack employee.edit (write).
+    // The sync / store / update / destroy endpoints all gate on the "update"
+    // policy which requires employee.edit, so a scheduler hitting "Save week"
+    // would receive a 403. Detect the role up front and render a read-only
+    // surface instead of letting the user attempt an edit that cannot succeed.
+    const session = useWebSession();
+    const isCompanyAdmin = normalizeWebRole(session.data) === 'company_admin';
+    const readOnly = !isCompanyAdmin;
+
     const employeeQuery = useEmployee(employeeId);
     const availabilityQuery = useEmployeeAvailability(employeeId);
     const syncMutation = useSyncWeeklyAvailability(employeeId);
@@ -333,8 +343,9 @@ function EmployeeAvailabilityPage(): JSX.Element {
     const isLoading = employeeQuery.isLoading || availabilityQuery.isLoading;
 
     // Browser-level guard so a refresh never silently discards a painted week.
+    // Read-only users cannot save, so the guard only fires for company admins.
     useEffect(() => {
-        if (!isDirty) {
+        if (!isDirty || readOnly) {
             return;
         }
 
@@ -346,7 +357,7 @@ function EmployeeAvailabilityPage(): JSX.Element {
         window.addEventListener('beforeunload', handleBeforeUnload);
 
         return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-    }, [isDirty]);
+    }, [isDirty, readOnly]);
 
     /* ---------------------------------------------------------------------- */
     /* Draft mutations                                                        */
@@ -618,26 +629,39 @@ function EmployeeAvailabilityPage(): JSX.Element {
                             <ArrowLeft aria-hidden="true" className="size-4" />
                             Directory
                         </Link>
-                        <button
-                            type="button"
-                            onClick={handleReset}
-                            disabled={!isDirty || isSaving}
-                            className={OUTLINE_BUTTON}
-                        >
-                            <RotateCcw aria-hidden="true" className="size-4" />
-                            Reset
-                        </button>
-                        <button type="button" onClick={handleSave} disabled={!isDirty || isSaving} className={PRIMARY_BUTTON}>
-                            {isSaving ? (
-                                <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-                            ) : (
-                                <Save aria-hidden="true" className="size-4" />
-                            )}
-                            {isSaving ? 'Saving…' : 'Save week'}
-                        </button>
+                        {!readOnly ? (
+                            <>
+                                <button
+                                    type="button"
+                                    onClick={handleReset}
+                                    disabled={!isDirty || isSaving}
+                                    className={OUTLINE_BUTTON}
+                                >
+                                    <RotateCcw aria-hidden="true" className="size-4" />
+                                    Reset
+                                </button>
+                                <button type="button" onClick={handleSave} disabled={!isDirty || isSaving} className={PRIMARY_BUTTON}>
+                                    {isSaving ? (
+                                        <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+                                    ) : (
+                                        <Save aria-hidden="true" className="size-4" />
+                                    )}
+                                    {isSaving ? 'Saving…' : 'Save week'}
+                                </button>
+                            </>
+                        ) : null}
                     </div>
                 </div>
             </header>
+
+            {/* Read-only banner for schedulers who lack employee.edit */}
+            {readOnly ? (
+                <ErrorAlert
+                    variant="info"
+                    title="View only"
+                    message="Saving availability requires administrator permissions. You can review the current schedule but changes cannot be persisted."
+                />
+            ) : null}
 
             {/* Availability read failure (employee loaded fine) */}
             {availabilityQuery.isError ? (
@@ -698,26 +722,28 @@ function EmployeeAvailabilityPage(): JSX.Element {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <ViewSwitcher view={view} onChange={setView} />
 
-                <div className="flex flex-wrap items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={handleApplyStandardWeek}
-                        disabled={isSaving}
-                        className={OUTLINE_BUTTON}
-                    >
-                        <Sparkles aria-hidden="true" className="size-4" />
-                        Standard week
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setIsClearOpen(true)}
-                        disabled={isSaving || blockCount === 0}
-                        className={DANGER_BUTTON}
-                    >
-                        <Trash2 aria-hidden="true" className="size-4" />
-                        Clear week
-                    </button>
-                </div>
+                {!readOnly ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={handleApplyStandardWeek}
+                            disabled={isSaving}
+                            className={OUTLINE_BUTTON}
+                        >
+                            <Sparkles aria-hidden="true" className="size-4" />
+                            Standard week
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setIsClearOpen(true)}
+                            disabled={isSaving || blockCount === 0}
+                            className={DANGER_BUTTON}
+                        >
+                            <Trash2 aria-hidden="true" className="size-4" />
+                            Clear week
+                        </button>
+                    </div>
+                ) : null}
             </div>
 
             {/* Editor surface */}
@@ -729,7 +755,7 @@ function EmployeeAvailabilityPage(): JSX.Element {
                     <AvailabilityWeekGrid
                         selection={selection}
                         onCommitRange={handleCommitRange}
-                        disabled={isSaving || availabilityQuery.isError}
+                        disabled={readOnly || isSaving || availabilityQuery.isError}
                     />
                     <p className="text-xs text-muted-foreground">
                         Drag across a row to mark availability, drag over selected cells to clear
@@ -763,7 +789,7 @@ function EmployeeAvailabilityPage(): JSX.Element {
                         onEdit={handleEdit}
                         onRemove={handleRemove}
                         onClearDay={handleClearDay}
-                        disabled={isSaving || availabilityQuery.isError}
+                        disabled={readOnly || isSaving || availabilityQuery.isError}
                     />
                 </section>
             )}

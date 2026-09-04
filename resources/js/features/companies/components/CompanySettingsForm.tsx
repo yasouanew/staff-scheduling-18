@@ -19,6 +19,7 @@ import {
     type CompanySettingsFormInput,
     type CompanySettingsFormValues,
 } from '../schemas';
+import { LogoUpload } from './LogoUpload';
 
 interface CompanySettingsFormProps {
     /** Current persisted settings used to seed the form. */
@@ -52,6 +53,7 @@ function toDefaults(settings: CompanySettings): CompanySettingsFormInput {
         allowEmployeeAvailability: settings.allowEmployeeAvailability,
         allowLeaveRequests: settings.allowLeaveRequests,
         allowPushNotifications: settings.allowPushNotifications,
+        logo: settings.logo ?? '',
         primaryColor: settings.primaryColor ?? '',
         secondaryColor: settings.secondaryColor ?? '',
     };
@@ -488,8 +490,23 @@ export function CompanySettingsForm({
             <section className="space-y-4">
                 <SectionHeading
                     title="Branding"
-                    description="Optional brand colours used across employee-facing views."
+                    description="Optional logo and brand colours used across employee-facing views."
                 />
+                <div className="space-y-1.5">
+                    <span className="block text-sm font-medium text-foreground">Company logo</span>
+                    <Controller
+                        control={control}
+                        name="logo"
+                        render={({ field }) => (
+                            <LogoUpload
+                                value={field.value ?? ''}
+                                onChange={(next) => field.onChange(next ?? '')}
+                                error={errors.logo?.message}
+                                disabled={isSaving}
+                            />
+                        )}
+                    />
+                </div>
                 <div className="grid gap-5 sm:grid-cols-2">
                     <Controller
                         control={control}

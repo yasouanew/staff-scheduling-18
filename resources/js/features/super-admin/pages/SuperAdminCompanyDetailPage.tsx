@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { format, parseISO } from 'date-fns';
+import { useState } from 'react';
 import {
     AlertTriangle,
     ArrowLeft,
@@ -9,7 +10,9 @@ import {
     CreditCard,
     Globe,
     Mail,
+    Pencil,
     Phone,
+    Settings,
     ShieldAlert,
     Users,
 } from 'lucide-react';
@@ -25,6 +28,7 @@ import { cn } from '@/lib/utils';
 import type { Company, CompanyStatus } from '@/types/company';
 import { COMPANY_STATUS_LABELS } from '@/types/company';
 
+import { CompanyFormModal } from '@/features/companies/components/CompanyFormModal';
 import { useCompany, useCompanySubscription, useUpdateCompanyStatus } from '@/features/companies/hooks/useCompanies';
 
 /** Dedicated client so the page works standalone. */
@@ -66,6 +70,10 @@ function subStatusTone(status: string | undefined): BadgeTone {
         case 'past_due':
         case 'grace_period':
             return 'warning';
+        case 'suspended':
+        case 'paused':
+            return 'danger';
+        case 'incomplete':
         case 'cancelled':
         case 'expired':
             return 'neutral';
@@ -85,6 +93,12 @@ function subStatusLabel(status: string | undefined): string {
             return 'Past due';
         case 'grace_period':
             return 'Grace period';
+        case 'suspended':
+            return 'Suspended';
+        case 'paused':
+            return 'Paused';
+        case 'incomplete':
+            return 'Incomplete';
         case 'cancelled':
             return 'Cancelled';
         case 'expired':
@@ -138,6 +152,7 @@ function CompanyDetail({ id }: { id: string }): JSX.Element {
     const { data: company, isLoading, isError, refetch } = useCompany(id);
     const { data: subscription } = useCompanySubscription(id);
     const updateStatus = useUpdateCompanyStatus();
+    const [isEditOpen, setIsEditOpen] = useState(false);
 
     if (isLoading) return <DetailSkeleton />;
 
@@ -216,27 +231,44 @@ function CompanyDetail({ id }: { id: string }): JSX.Element {
                         </p>
                     </div>
                 </div>
-                {isSuspended ? (
+                <div className="flex shrink-0 items-center gap-3">
                     <button
                         type="button"
-                        onClick={handleReactivate}
-                        disabled={updateStatus.isPending}
-                        className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-60"
+                        onClick={() => setIsEditOpen(true)}
+                        className="inline-flex h-10 items-center gap-2 rounded-lg border border-input bg-card px-4 text-sm font-medium text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                        <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                        {updateStatus.isPending ? 'Reactivating…' : 'Reactivate'}
+                        <Pencil className="h-4 w-4" aria-hidden="true" />
+                        Edit
                     </button>
-                ) : (
-                    <button
-                        type="button"
-                        onClick={handleSuspend}
-                        disabled={updateStatus.isPending}
-                        className="inline-flex h-10 items-center gap-2 rounded-lg border border-danger/30 bg-danger/5 px-4 text-sm font-semibold text-danger transition-colors hover:bg-danger/10 disabled:opacity-60"
+                    <Link
+                        to={`/super-admin/companies/${id}/settings`}
+                        className="inline-flex h-10 items-center gap-2 rounded-lg border border-input bg-card px-4 text-sm font-medium text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                        <Ban className="h-4 w-4" aria-hidden="true" />
-                        {updateStatus.isPending ? 'Suspending…' : 'Suspend'}
-                    </button>
-                )}
+                        <Settings className="h-4 w-4" aria-hidden="true" />
+                        Settings
+                    </Link>
+                    {isSuspended ? (
+                        <button
+                            type="button"
+                            onClick={handleReactivate}
+                            disabled={updateStatus.isPending}
+                            className="inline-flex h-10 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-60"
+                        >
+                            <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                            {updateStatus.isPending ? 'Reactivating…' : 'Reactivate'}
+                        </button>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={handleSuspend}
+                            disabled={updateStatus.isPending}
+                            className="inline-flex h-10 items-center gap-2 rounded-lg border border-danger/30 bg-danger/5 px-4 text-sm font-semibold text-danger transition-colors hover:bg-danger/10 disabled:opacity-60"
+                        >
+                            <Ban className="h-4 w-4" aria-hidden="true" />
+                            {updateStatus.isPending ? 'Suspending…' : 'Suspend'}
+                        </button>
+                    )}
+                </div>
             </div>
 
             {/* Aggregation ribbon */}
@@ -330,6 +362,12 @@ function CompanyDetail({ id }: { id: string }): JSX.Element {
                     )}
                 </section>
             </div>
+
+            <CompanyFormModal
+                open={isEditOpen}
+                onOpenChange={setIsEditOpen}
+                company={company}
+            />
         </div>
     );
 }

@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { format, parseISO } from 'date-fns';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
     AlertTriangle,
     Building2,
@@ -44,7 +46,7 @@ import { PageHeader } from '@/Components/common/PageHeader';
 import { StatCard } from '@/Components/common/StatCard';
 import { getApiErrorMessage } from '@/lib/api-client';
 
-import { useWebSession } from '@/features/auth/hooks/useWebSession';
+import { useWebSession, WEB_SESSION_KEY } from '@/features/auth/hooks/useWebSession';
 
 import type { BillingPayment } from '@/types/billing';
 import type { BranchUsageItem, BillingCycle, ManagementPlan, SubscriptionSummary } from '../types';
@@ -60,6 +62,7 @@ import {
     useBillingPortal,
     useCancelSubscription,
     useChangeBillingPeriod,
+    useConfirmCheckout,
     useDowngradeSubscription,
     useManagementPlans,
     useResumeSubscription,
@@ -67,6 +70,7 @@ import {
     useSubscriptionInvoices,
     useSubscriptionSummary,
     useUpgradeSubscription,
+    useUsageOverview,
 } from '../hooks/useSubscription';
 import {
     useActivateBranch,
@@ -123,17 +127,23 @@ function priceForCycle(
 /** Status pill tone for a subscription/payment status. */
 function statusTone(status: string | undefined): 'success' | 'warning' | 'danger' | 'info' {
     switch (status) {
+        // Subscription statuses that grant access (SubscriptionStatus::grantsAccess()).
         case 'active':
         case 'trialing':
-        case 'succeeded':
-        case 'paid':
             return 'success';
+        // Payment succeeded.
+        case 'succeeded':
+            return 'success';
+        // Requires attention — payment overdue, suspended, or incomplete.
         case 'past_due':
         case 'failed':
         case 'incomplete':
         case 'expired':
             return 'danger';
+        // Temporary/hold/attention states.
+        case 'grace_period':
         case 'paused':
+        case 'suspended':
         case 'pending':
         case 'cancelled':
         case 'canceled':
@@ -382,6 +392,7 @@ export default function SubscriptionDashboardPage(): JSX.Element {
     const canManageBranch = canManageBranchBilling(user);
 
     const summary = useSubscriptionSummary();
+    const usageOverview = useUsageOverview();
     const plansQuery = useManagementPlans();
 
     const activateBranch = useActivateBranch();
@@ -394,6 +405,59 @@ export default function SubscriptionDashboardPage(): JSX.Element {
     const cancelSubscription = useCancelSubscription();
     const resumeSubscription = useResumeSubscription();
     const changeBillingPeriod = useChangeBillingPeriod();
+    const confirmCheckout = useConfirmCheckout();
+
+    const queryClient = useQueryClient();
+    const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const checkoutStatus = searchParams.get('checkout');
+    const checkoutSessionId = searchParams.get('session_id');
+
+    /* ------------------------------------------------------------------ */
+    /* Stripe Checkout return handling                                      */
+    /* ------------------------------------------------------------------ */
+    //
+    // Stripe redirects back to `/subscription?checkout=success&session_id=...`
+    // after a completed payment (the backend success URL). When the webhook is
+    // not configured the local subscription would otherwise stay `incomplete`
+    // forever, so we confirm the session here: the backend activates the
+    // subscription, records the invoice payment and unlocks the company. The
+    // return URL is then stripped so a refresh never re-confirms.
+    useEffect(() => {
+        if (checkoutStatus !== 'success' || !checkoutSessionId) {
+            return;
+        }
+
+        let cancelled = false;
+
+        void confirmCheckout
+            .mutateAsync(checkoutSessionId)
+            .then(async () => {
+                // Re-fetch the authoritative session so the header trial badge
+                // and the /auth/me permission gate reflect the new state.
+                await queryClient.invalidateQueries({ queryKey: WEB_SESSION_KEY });
+                if (cancelled) return;
+                navigate('/subscription', { replace: true });
+                toast.success('Subscription activated', {
+                    description: 'Thanks — your subscription is now active.',
+                });
+            })
+            .catch((error) => {
+                if (cancelled) return;
+                navigate('/subscription', { replace: true });
+                toast.error('Payment confirmation pending', {
+                    description: getApiErrorMessage(
+                        error,
+                        "We couldn't confirm your payment yet. If you were charged it will appear here shortly.",
+                    ),
+                });
+            });
+
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [checkoutStatus, checkoutSessionId]);
 
     /* ------------------------------------------------------------------ */
     /* Local UI state                                                       */
@@ -427,14 +491,25 @@ export default function SubscriptionDashboardPage(): JSX.Element {
 
     const currentPlan = data?.plan ?? null;
     const subscription = data?.subscription ?? null;
-    /** Features of the current plan, resolved from the full plans list (summary omits them). */
+    /**
+     * Features of the current plan, resolved from the summary's `features` array
+     * (the backend returns the full enabled-feature set for the entitled plan).
+     */
     const currentPlanFeatures =
         currentPlan === null
             ? []
-            : (plans.find((plan) => plan.id === currentPlan.id)?.features ?? []);
-    const branchUsage = data?.usage?.branchUsage ?? [];
-    const activeBranches = data?.usage?.branches?.used ?? 0;
-    const branchLimit = data?.usage?.branches?.limit ?? null;
+            : data?.features?.filter((feature) => feature.enabled).map((feature) => feature.label) ?? [];
+    /**
+     * Branch usage comes from the dedicated `GET /subscription/usage` endpoint,
+     * which carries `name`/`active` for every branch. The summary's `branch_usage`
+     * (`UsageService::usageFor()`) is name-less, so it is only a fallback while the
+     * richer query is loading.
+     */
+    const usageFromOverview: BranchUsageItem[] = usageOverview.data?.branchesUsage ?? [];
+    const branchUsage: BranchUsageItem[] =
+        usageFromOverview.length > 0 ? usageFromOverview : (data?.usage?.branchUsage ?? []);
+    const activeBranches = usageOverview.data?.branches?.used ?? data?.usage?.branches?.used ?? 0;
+    const branchLimit = usageOverview.data?.branches?.limit ?? data?.usage?.branches?.limit ?? null;
     const branchLimitReached = branchLimit !== null && activeBranches >= branchLimit;
 
     const totalEmployees = branchUsage.reduce((sum, branch) => sum + branch.employeesUsed, 0);

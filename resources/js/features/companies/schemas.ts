@@ -91,6 +91,13 @@ export const companyFormSchema = z.object({
         .optional()
         .or(z.literal(''))
         .transform((value) => (value ? value : undefined)),
+    subscriptionId: z.coerce
+        .number()
+        .int('Enter a whole number.')
+        .positive('Subscription id must be positive.')
+        .optional()
+        .nullable()
+        .transform((value) => (value ? value : undefined)),
     status: z.enum(toEnumValues(COMPANY_STATUSES as unknown as [string, ...string[]])),
 });
 
@@ -134,6 +141,13 @@ export const companySettingsSchema = z.object({
     allowEmployeeAvailability: z.boolean(),
     allowLeaveRequests: z.boolean(),
     allowPushNotifications: z.boolean(),
+    logo: z
+        .string()
+        .trim()
+        .max(2048, 'The logo reference is too large. Please use a smaller image or a URL.')
+        .optional()
+        .or(z.literal(''))
+        .transform((value) => (value ? value : undefined)),
     primaryColor: z
         .string()
         .trim()

@@ -2,6 +2,7 @@ import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import { format, parseISO } from 'date-fns';
 import {
     AlertTriangle,
+    Briefcase,
     Building2,
     CalendarClock,
     ChevronRight,
@@ -202,17 +203,24 @@ function BranchDetail({ branch }: { branch: Branch }): JSX.Element {
             {/* Relation counts + today's trading hours */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <StatCard
-                    title="User accounts"
-                    value={branch.usersCount ?? 0}
+                    title="Employees"
+                    value={branch.employeesCount ?? 0}
                     icon={Users}
                     tone="primary"
                     description="Staff linked to this branch"
                 />
                 <StatCard
+                    title="User accounts"
+                    value={branch.usersCount ?? 0}
+                    icon={Briefcase}
+                    tone="info"
+                    description="Directly provisioned accounts"
+                />
+                <StatCard
                     title="Shifts"
                     value={branch.shiftsCount ?? 0}
                     icon={CalendarClock}
-                    tone="info"
+                    tone="success"
                     description="Scheduled at this location"
                 />
                 <StatCard

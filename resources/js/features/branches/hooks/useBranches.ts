@@ -186,9 +186,11 @@ function mapBranch(dto: BranchDto): Branch {
         status: normalizeStatus(dto.status),
         companyName: dto.company?.name ?? null,
 
-        // Staff are linked to a branch through `employees.branch_id`; `users_count`
-        // only covers directly provisioned accounts, so it is the fallback.
-        usersCount: dto.employees_count ?? dto.users_count ?? null,
+        // The API reports both separately: staff are linked through
+        // `employees.branch_id` while `users_count` covers directly provisioned
+        // accounts. The detail page shows each as its own StatCard.
+        employeesCount: dto.employees_count ?? null,
+        usersCount: dto.users_count ?? null,
         shiftsCount: dto.shifts_count ?? null,
 
         createdAt: dto.created_at,
@@ -245,6 +247,8 @@ function toBranchPayload(values: BranchFormValues): Record<string, unknown> {
         manager_id: values.managerId ? Number(values.managerId) : null,
         phone: values.phone ?? null,
         address: values.address ?? null,
+        latitude: values.latitude ?? null,
+        longitude: values.longitude ?? null,
         timezone: values.timezone,
         status: values.status,
 

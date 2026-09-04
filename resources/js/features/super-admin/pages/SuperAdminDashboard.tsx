@@ -22,7 +22,11 @@ import type {
     RecentCompanyDto,
 } from '@/types/super-admin';
 
-import { usePlatformBillingMetrics, usePlatformMetrics } from '../hooks/useSuperAdmin';
+import {
+    usePlatformBillingMetrics,
+    usePlatformMetrics,
+    useSuspendedTenantCount,
+} from '../hooks/useSuperAdmin';
 
 /** Dedicated client so the platform dashboard works standalone. */
 const queryClient = new QueryClient({
@@ -47,10 +51,15 @@ function formatMoney(value: number | undefined): string {
     }).format(value);
 }
 
-/** Formats a churn rate (fraction) as a percentage. */
+/**
+ * Formats a churn rate as a percentage.
+ *
+ * The backend (`computeChurn` in `SuperAdminController`) already returns the
+ * rate as a percentage in the 0–100 range, so it must NOT be multiplied again.
+ */
 function formatPercent(value: number | undefined): string {
     if (value === undefined || Number.isNaN(value)) return '—';
-    return `${(value * 100).toFixed(1)}%`;
+    return `${value.toFixed(1)}%`;
 }
 
 /** Company status pill tone helper. */
@@ -125,6 +134,7 @@ function PlatformOverview(): JSX.Element {
         data: billing,
         isLoading: billingLoading,
     } = usePlatformBillingMetrics();
+    const { data: suspendedCount } = useSuspendedTenantCount();
 
     const recentCompanies = useMemo(() => data?.recentCompanies ?? [], [data]);
     const hasPlans = (data?.planDistribution.length ?? 0) > 0;
@@ -157,7 +167,7 @@ function PlatformOverview(): JSX.Element {
                     value={data?.stats.activeCompanies ?? 0}
                     icon={TrendingUp}
                     tone="success"
-                    description={`${data?.suspendedTenants ?? 0} suspended`}
+                    description={`${suspendedCount ?? 0} suspended`}
                     isLoading={isLoading}
                 />
                 <StatCard

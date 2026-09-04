@@ -281,12 +281,9 @@ async function fetchCurrentLeaveUser(): Promise<CurrentLeaveUser> {
 /** Determines whether a user is allowed to review and decide leave requests. */
 export function canReviewLeaveRequests(user: CurrentLeaveUser | undefined): boolean {
     return Boolean(
-        user?.permissions?.includes('leave.approve') ||
-            user?.permissions?.includes('leave.reject') ||
-            user?.role === 'admin' ||
-            user?.role === 'manager' ||
-            user?.role === 'owner' ||
-            user?.role === 'super_admin',
+        user?.permissions?.includes('leave_request.approve') ||
+        user?.permissions?.includes('leave_request.reject') ||
+        user?.role === 'super_admin',
     );
 }
 

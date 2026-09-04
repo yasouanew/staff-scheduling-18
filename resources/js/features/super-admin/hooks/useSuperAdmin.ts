@@ -44,6 +44,7 @@ import type {
 export const SUPER_ADMIN_KEYS = {
     metrics: ['super-admin', 'metrics'] as const,
     tenants: ['super-admin', 'tenants'] as const,
+    suspendedTenants: ['super-admin', 'suspended-tenants'] as const,
     billing: ['super-admin', 'billing-metrics'] as const,
     subscriptions: (page: number) => ['super-admin', 'subscriptions', page] as const,
     payments: (page: number) => ['super-admin', 'payments', page] as const,
@@ -67,6 +68,8 @@ interface CompanyDto {
     state: string | null;
     business_type: string | null;
     status: string | null;
+    trial_ends_at: string | null;
+    locked_at: string | null;
     subscription_id: number | null;
     branches_count?: number;
     employees_count?: number;
@@ -102,9 +105,12 @@ function mapCompany(dto: CompanyDto): Company {
         businessType: dto.business_type,
         status: normalizeStatus(dto.status),
         subscriptionId: dto.subscription_id,
+        trialEndsAt: dto.trial_ends_at,
+        lockedAt: dto.locked_at,
         branchesCount: dto.branches_count ?? null,
         employeesCount: dto.employees_count ?? null,
         usersCount: dto.users_count ?? null,
+        settings: null,
         createdAt: dto.created_at,
         updatedAt: dto.updated_at,
     };
@@ -139,21 +145,44 @@ async function fetchPlatformMetrics(): Promise<PlatformMetrics> {
             totalEmployees: stats.total_employees,
             activeSubscriptions: stats.active_subscriptions,
         },
-        totalTenants: stats.total_companies,
-        activeTenants: stats.active_companies,
-        suspendedTenants: Math.max(0, stats.total_companies - stats.active_companies),
-        employeesScheduled: stats.total_employees,
         planDistribution,
         recentCompanies: dto.recent_companies ?? [],
     };
 }
 
-async function fetchTenantCompanies(): Promise<Company[]> {
+async function fetchTenantCompanies(pageNumber: number): Promise<PlatformPage<Company>> {
     const response = await apiClient.get<ApiSuccessResponse<PaginatedCollection<CompanyDto>>>(
         '/companies',
-        { params: { per_page: 100 } },
+        { params: { per_page: 15, page: pageNumber } },
     );
-    return response.data.data.data.map(mapCompany);
+    return mapPage(response.data.data, mapCompany);
+}
+
+/** Reads the paginated tenant-company ledger (super-admin scope). */
+export function useTenantCompanies(pageNumber: number): UseQueryResult<PlatformPage<Company>, Error> {
+    return useQuery<PlatformPage<Company>, Error>({
+        queryKey: [...SUPER_ADMIN_KEYS.tenants, pageNumber],
+        queryFn: () => fetchTenantCompanies(pageNumber),
+        placeholderData: keepPreviousData,
+        staleTime: 15_000,
+    });
+}
+
+async function fetchSuspendedTenantCount(): Promise<number> {
+    const response = await apiClient.get<ApiSuccessResponse<PaginatedCollection<CompanyDto>>>(
+        '/companies',
+        { params: { per_page: 1, status: 'suspended' } },
+    );
+    return response.data.data.meta.total;
+}
+
+/** Reads the real suspended-tenant count (backend `status=suspended` filter). */
+export function useSuspendedTenantCount(): UseQueryResult<number, Error> {
+    return useQuery<number, Error>({
+        queryKey: SUPER_ADMIN_KEYS.suspendedTenants,
+        queryFn: fetchSuspendedTenantCount,
+        staleTime: 30_000,
+    });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -165,15 +194,6 @@ export function usePlatformMetrics(): UseQueryResult<PlatformMetrics, Error> {
     return useQuery<PlatformMetrics, Error>({
         queryKey: SUPER_ADMIN_KEYS.metrics,
         queryFn: fetchPlatformMetrics,
-        staleTime: 15_000,
-    });
-}
-
-/** Reads the full tenant-company ledger (super-admin scope). */
-export function useTenantCompanies(): UseQueryResult<Company[], Error> {
-    return useQuery<Company[], Error>({
-        queryKey: SUPER_ADMIN_KEYS.tenants,
-        queryFn: fetchTenantCompanies,
         staleTime: 15_000,
     });
 }

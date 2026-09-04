@@ -76,6 +76,11 @@ function normalizeType(raw: string | undefined): AppNotification['type'] {
         case 'leave_request.rejected':
         case 'leave_rejected':
             return 'leave_rejected';
+        case 'billing.trial_ending':
+        case 'billing.trial_expired':
+        case 'billing.subscription_renewal_reminder':
+        case 'billing.subscription_activated':
+            return 'billing_alert';
         default:
             return 'system_alert';
     }
@@ -98,6 +103,15 @@ function toActionUrl(type: AppNotification['type'], data: Record<string, unknown
 
     if (type === 'shift_assigned') {
         return typeof shiftId === 'string' || typeof shiftId === 'number' ? '/shifts' : '/rosters';
+    }
+
+    // Backend billing notifications (billing.trial_ending, billing.trial_expired,
+    // billing.subscription_renewal_reminder, billing.subscription_activated) are
+    // only ever sent to company_admin users, whose subscription self-service
+    // dashboard lives at /subscription. The backend payload's `action_url`
+    // targets `/companies/{id}/subscriptions`, which is not a route in this SPA.
+    if (type === 'billing_alert') {
+        return '/subscription';
     }
 
     return undefined;
@@ -259,13 +273,13 @@ export function useNotifications({
             queryClient.setQueriesData<NotificationsPage>({ queryKey: NOTIFICATION_KEYS.all }, (previous) =>
                 previous
                     ? {
-                          ...previous,
-                          notifications: previous.notifications.map((notification) => ({
-                              ...notification,
-                              isRead: true,
-                          })),
-                          unreadCount: 0,
-                      }
+                        ...previous,
+                        notifications: previous.notifications.map((notification) => ({
+                            ...notification,
+                            isRead: true,
+                        })),
+                        unreadCount: 0,
+                    }
                     : previous,
             );
         },

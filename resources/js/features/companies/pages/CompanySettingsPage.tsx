@@ -14,18 +14,26 @@ import {
 } from '../hooks/useCompanies';
 
 /** Breadcrumb trail: Companies › {name} › Settings. */
-function Breadcrumb({ id, name }: { id: string; name: string }): JSX.Element {
+function Breadcrumb({
+    id,
+    name,
+    basePath,
+}: {
+    id: string;
+    name: string;
+    basePath: string;
+}): JSX.Element {
     return (
         <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 text-sm">
             <Link
-                to="/companies"
+                to={basePath}
                 className="rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
                 Companies
             </Link>
             <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
             <Link
-                to={`/companies/${id}`}
+                to={`${basePath}/${id}`}
                 className="max-w-[12rem] truncate rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
                 {name}
@@ -64,10 +72,12 @@ function SettingsContent({
     id,
     company,
     settings,
+    basePath,
 }: {
     id: string;
     company: Company;
     settings: CompanySettings;
+    basePath: string;
 }): JSX.Element {
     const updateSettings = useUpdateCompanySettings();
 
@@ -86,7 +96,7 @@ function SettingsContent({
 
     return (
         <div className="space-y-6">
-            <Breadcrumb id={id} name={company.name} />
+            <Breadcrumb id={id} name={company.name} basePath={basePath} />
 
             <div className="flex items-center gap-3">
                 <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
@@ -122,8 +132,21 @@ function SettingsContent({
  * {@link useUpdateCompanySettings} with success/error toast feedback. Handles
  * loading (skeleton) and error/not-found states explicitly.
  */
-export function CompanySettingsPage(): JSX.Element {
-    const { id = '' } = useParams<{ id: string }>();
+export function CompanySettingsPage({
+    basePath = '/companies',
+    companyId,
+}: {
+    /** Base path for breadcrumb/back links (`/companies` or `/super-admin/companies`). */
+    basePath?: string;
+    /**
+     * Explicit company id. When provided (e.g. the top-level `/settings` route,
+     * where there is no `:id` route param), it overrides `useParams`. Without
+     * it the page falls back to the `/companies/:id/settings` route param.
+     */
+    companyId?: string;
+}): JSX.Element {
+    const { id: paramId = '' } = useParams<{ id: string }>();
+    const id = companyId ?? paramId;
     const companyQuery = useCompany(id);
     const settingsQuery = useCompanySettings(id);
 
@@ -162,7 +185,7 @@ export function CompanySettingsPage(): JSX.Element {
                         Try again
                     </button>
                     <Link
-                        to="/companies"
+                        to={basePath}
                         className="inline-flex h-10 items-center justify-center rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                         Back to companies
@@ -173,7 +196,12 @@ export function CompanySettingsPage(): JSX.Element {
     }
 
     return (
-        <SettingsContent id={id} company={companyQuery.data} settings={settingsQuery.data} />
+        <SettingsContent
+            id={id}
+            company={companyQuery.data}
+            settings={settingsQuery.data}
+            basePath={basePath}
+        />
     );
 }
 

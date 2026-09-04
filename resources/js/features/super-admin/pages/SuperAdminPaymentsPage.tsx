@@ -111,10 +111,34 @@ const columns: ColumnDef<PlatformPayment>[] = [
         cell: ({ row }) => <PaymentStatusBadge payment={row.original} />,
     },
     {
+        accessorKey: 'refundedAt',
+        header: 'Refunded',
+        cell: ({ row }) =>
+            row.original.isRefunded ? (
+                <div className="text-sm">
+                    <span className="block text-muted-foreground">{formatDate(row.original.refundedAt)}</span>
+                    <span className="text-xs text-danger">
+                        {formatMoney(row.original.amountRefunded, row.original.currency)}
+                    </span>
+                </div>
+            ) : (
+                <span className="text-sm text-muted-foreground">—</span>
+            ),
+    },
+    {
         accessorKey: 'paidAt',
         header: 'Paid',
         cell: ({ row }) => (
             <span className="text-sm text-muted-foreground">{formatDate(row.original.paidAt)}</span>
+        ),
+    },
+    {
+        accessorKey: 'provider',
+        header: 'Provider',
+        cell: ({ row }) => (
+            <span className="text-sm capitalize text-muted-foreground">
+                {row.original.provider ?? '—'}
+            </span>
         ),
     },
     {

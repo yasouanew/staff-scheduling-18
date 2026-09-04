@@ -1,12 +1,13 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ShieldOff, X } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Camera, ShieldOff, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
 import { LoadingSpinner } from '@/Components/common/LoadingSpinner';
+import { Avatar, AvatarFallback, AvatarImage } from '@/Components/ui/avatar';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -32,7 +33,7 @@ import {
     type UpdateEmployeeInput,
 } from '@/types/employee';
 
-import { useUpdateEmployee } from '../hooks/useEmployees';
+import { useUpdateEmployee, useUploadEmployeePhoto } from '../hooks/useEmployees';
 
 interface EditEmployeeModalProps {
     /**
@@ -58,7 +59,8 @@ const editEmployeeSchema = z.object({
     departmentId: z.string(),
     positionId: z.string(),
     branchId: z.string(),
-    employmentType: z.enum(['full_time', 'part_time', 'casual', 'contract']),
+    // Mirrors UpdateEmployeeRequest's `in:full_time,part_time,casual,contract,contractor`.
+    employmentType: z.enum(['full_time', 'part_time', 'casual', 'contract', 'contractor']),
     hourlyRate: z
         .string()
         .trim()
@@ -66,10 +68,29 @@ const editEmployeeSchema = z.object({
             (value) => value === '' || (Number.isFinite(Number(value)) && Number(value) >= 0),
             'Enter a valid hourly rate.',
         ),
-    status: z.enum(['active', 'pending', 'inactive']),
+    // Mirrors UpdateEmployeeRequest's `in:active,pending,inactive,terminated`.
+    status: z.enum(['active', 'pending', 'inactive', 'terminated']),
+    // Optional profile fields accepted by the update endpoint.
+    employeeNumber: z.string(),
+    dob: z.string(),
+    gender: z.string(),
+    address: z.string(),
+    emergencyContact: z.string(),
+    emergencyPhone: z.string(),
+    hireDate: z.string(),
+    terminationDate: z.string(),
 });
 
 type EditEmployeeFormValues = z.infer<typeof editEmployeeSchema>;
+
+/** Gender options accepted by `UpdateEmployeeRequest` (`in:male,female,other,prefer_not_to_say`). */
+const GENDERS: readonly { value: string; label: string }[] = [
+    { value: '', label: 'Not specified' },
+    { value: 'male', label: 'Male' },
+    { value: 'female', label: 'Female' },
+    { value: 'other', label: 'Other' },
+    { value: 'prefer_not_to_say', label: 'Prefer not to say' },
+];
 
 /** Shared field styling, matching the add-employee drawer. */
 const fieldClasses = cn(
@@ -86,6 +107,16 @@ function splitName(fullName: string): { firstName: string; lastName: string } {
     return { firstName: first ?? '', lastName: rest.join(' ') };
 }
 
+/** Derives the two-letter initials shown while no photo is uploaded. */
+function getInitials(name: string): string {
+    return name
+        .trim()
+        .split(/\s+/)
+        .slice(0, 2)
+        .map((part) => part.charAt(0).toUpperCase())
+        .join('');
+}
+
 /**
  * Slide-over form for editing an existing team member, opened from the table's
  * three-dot row menu.
@@ -99,8 +130,10 @@ export function EditEmployeeModal({
     onOpenChange,
 }: EditEmployeeModalProps): JSX.Element {
     const updateEmployee = useUpdateEmployee();
+    const uploadPhoto = useUploadEmployeePhoto();
     const { data: branchOptions = [], isLoading: isLoadingBranches } = useBranchOptions();
     const { data: departmentOptions = [], isLoading: isLoadingDepartments } = useDepartmentOptions();
+    const photoInputRef = useRef<HTMLInputElement>(null);
 
     const {
         register,
@@ -120,6 +153,14 @@ export function EditEmployeeModal({
             employmentType: 'full_time',
             hourlyRate: '',
             status: 'active',
+            employeeNumber: '',
+            dob: '',
+            gender: '',
+            address: '',
+            emergencyContact: '',
+            emergencyPhone: '',
+            hireDate: '',
+            terminationDate: '',
         },
     });
 
@@ -168,8 +209,41 @@ export function EditEmployeeModal({
             employmentType: employee.employmentType,
             hourlyRate: employee.hourlyRate ?? '',
             status: employee.status,
+            employeeNumber: employee.employeeNumber ?? '',
+            dob: employee.dob ?? '',
+            gender: employee.gender ?? '',
+            address: employee.address ?? '',
+            emergencyContact: employee.emergencyContact ?? '',
+            emergencyPhone: employee.emergencyPhone ?? '',
+            hireDate: employee.hireDate ?? '',
+            terminationDate: employee.terminationDate ?? '',
         });
     }, [employee?.id, reset]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    /** Upload a profile photo (or replace an existing one) via the photo endpoint. */
+    const handlePhotoChange = async (
+        event: React.ChangeEvent<HTMLInputElement>,
+    ): Promise<void> => {
+        const file = event.target.files?.[0];
+        // Reset the input so selecting the same file again still fires onChange.
+        event.target.value = '';
+
+        if (!file || !employee) return;
+
+        try {
+            await uploadPhoto.mutateAsync({ employeeId: employee.id, file });
+            toast.success('Photo updated', {
+                description: `${employee.name}'s profile photo was updated.`,
+            });
+        } catch (error) {
+            toast.error('Unable to upload photo', {
+                description: getApiErrorMessage(
+                    error,
+                    'The photo must be a JPG, PNG or WebP under 2 MB.',
+                ),
+            });
+        }
+    };
 
     /** Persist the form, then close on success. */
     async function save(values: EditEmployeeFormValues): Promise<void> {
@@ -246,6 +320,50 @@ export function EditEmployeeModal({
                         {/* Body */}
                         <form onSubmit={submit} noValidate className="flex flex-1 flex-col overflow-y-auto">
                             <div className="flex-1 space-y-5 p-6">
+                                {/* Photo — uploads to POST /employees/{id}/photo */}
+                                <div className="flex items-center gap-4">
+                                    <Avatar className="size-16">
+                                        {employee?.avatarUrl ? (
+                                            <AvatarImage src={employee.avatarUrl} alt={employee.name} />
+                                        ) : null}
+                                        <AvatarFallback className="text-lg">
+                                            {getInitials(employee?.name ?? '')}
+                                        </AvatarFallback>
+                                    </Avatar>
+                                    <div className="space-y-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => photoInputRef.current?.click()}
+                                            disabled={uploadPhoto.isPending}
+                                            className={cn(
+                                                'inline-flex h-9 items-center gap-2 rounded-lg border border-input bg-card px-3 text-sm font-medium text-foreground transition-colors',
+                                                'hover:bg-secondary hover:text-secondary-foreground',
+                                                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                                'disabled:cursor-not-allowed disabled:opacity-60',
+                                            )}
+                                        >
+                                            {uploadPhoto.isPending ? (
+                                                <LoadingSpinner className="size-4" label="Uploading" />
+                                            ) : (
+                                                <Camera className="size-4" aria-hidden="true" />
+                                            )}
+                                            {uploadPhoto.isPending ? 'Uploading...' : 'Change photo'}
+                                        </button>
+                                        <p className="text-xs text-muted-foreground">
+                                            JPG, PNG or WebP under 2 MB.
+                                        </p>
+                                        <input
+                                            ref={photoInputRef}
+                                            type="file"
+                                            accept="image/jpeg,image/png,image/webp"
+                                            className="sr-only"
+                                            onChange={(event) => {
+                                                void handlePhotoChange(event);
+                                            }}
+                                        />
+                                    </div>
+                                </div>
+
                                 {/* Name */}
                                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                     <div className="space-y-1.5">
@@ -303,6 +421,43 @@ export function EditEmployeeModal({
                                     <p className="text-sm text-muted-foreground">
                                         Change the email from the row menu&apos;s “Send invite” action.
                                     </p>
+                                </div>
+
+                                {/* Phone — read-only: it lives on the linked user record and
+                                is only settable via the invite payload. */}
+                                <div className="space-y-1.5">
+                                    <span className="block text-sm font-medium text-foreground">
+                                        Phone
+                                    </span>
+                                    <p className="rounded-lg border border-dashed border-border bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
+                                        {employee?.phone || 'Not recorded'}
+                                    </p>
+                                    <p className="text-sm text-muted-foreground">
+                                        Phone is tied to the login account; update it when sending an
+                                        invite.
+                                    </p>
+                                </div>
+
+                                {/* Staff number */}
+                                <div className="space-y-1.5">
+                                    <label
+                                        htmlFor="edit-employeeNumber"
+                                        className="block text-sm font-medium text-foreground"
+                                    >
+                                        Staff number <span className="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <input
+                                        id="edit-employeeNumber"
+                                        type="text"
+                                        autoComplete="off"
+                                        placeholder="e.g. EMP-1024"
+                                        aria-invalid={Boolean(errors.employeeNumber)}
+                                        className={fieldClasses}
+                                        {...register('employeeNumber')}
+                                    />
+                                    {errors.employeeNumber && (
+                                        <p className="text-sm text-danger">{errors.employeeNumber.message}</p>
+                                    )}
                                 </div>
 
                                 {/* Department */}
@@ -385,6 +540,153 @@ export function EditEmployeeModal({
                                             </option>
                                         ))}
                                     </select>
+                                </div>
+
+                                {/* Personal details */}
+                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                    <div className="space-y-1.5">
+                                        <label
+                                            htmlFor="edit-dob"
+                                            className="block text-sm font-medium text-foreground"
+                                        >
+                                            Date of birth <span className="font-normal text-muted-foreground">(optional)</span>
+                                        </label>
+                                        <input
+                                            id="edit-dob"
+                                            type="date"
+                                            max={new Date().toISOString().slice(0, 10)}
+                                            aria-invalid={Boolean(errors.dob)}
+                                            className={fieldClasses}
+                                            {...register('dob')}
+                                        />
+                                        {errors.dob && (
+                                            <p className="text-sm text-danger">{errors.dob.message}</p>
+                                        )}
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label
+                                            htmlFor="edit-gender"
+                                            className="block text-sm font-medium text-foreground"
+                                        >
+                                            Gender
+                                        </label>
+                                        <select
+                                            id="edit-gender"
+                                            className={fieldClasses}
+                                            {...register('gender')}
+                                        >
+                                            {GENDERS.map((option) => (
+                                                <option key={option.value} value={option.value}>
+                                                    {option.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                    <label
+                                        htmlFor="edit-address"
+                                        className="block text-sm font-medium text-foreground"
+                                    >
+                                        Address <span className="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <textarea
+                                        id="edit-address"
+                                        rows={2}
+                                        autoComplete="street-address"
+                                        placeholder="e.g. 12 Harbour St, Sydney NSW 2000"
+                                        aria-invalid={Boolean(errors.address)}
+                                        className={cn(fieldClasses, 'h-auto min-h-16 resize-y py-2')}
+                                        {...register('address')}
+                                    />
+                                    {errors.address && (
+                                        <p className="text-sm text-danger">{errors.address.message}</p>
+                                    )}
+                                </div>
+
+                                {/* Emergency contact */}
+                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                    <div className="space-y-1.5">
+                                        <label
+                                            htmlFor="edit-emergencyContact"
+                                            className="block text-sm font-medium text-foreground"
+                                        >
+                                            Emergency contact <span className="font-normal text-muted-foreground">(optional)</span>
+                                        </label>
+                                        <input
+                                            id="edit-emergencyContact"
+                                            type="text"
+                                            autoComplete="off"
+                                            placeholder="e.g. Jordan Bennett"
+                                            aria-invalid={Boolean(errors.emergencyContact)}
+                                            className={fieldClasses}
+                                            {...register('emergencyContact')}
+                                        />
+                                        {errors.emergencyContact && (
+                                            <p className="text-sm text-danger">{errors.emergencyContact.message}</p>
+                                        )}
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label
+                                            htmlFor="edit-emergencyPhone"
+                                            className="block text-sm font-medium text-foreground"
+                                        >
+                                            Emergency phone <span className="font-normal text-muted-foreground">(optional)</span>
+                                        </label>
+                                        <input
+                                            id="edit-emergencyPhone"
+                                            type="tel"
+                                            autoComplete="off"
+                                            placeholder="e.g. 0412 345 678"
+                                            aria-invalid={Boolean(errors.emergencyPhone)}
+                                            className={fieldClasses}
+                                            {...register('emergencyPhone')}
+                                        />
+                                        {errors.emergencyPhone && (
+                                            <p className="text-sm text-danger">{errors.emergencyPhone.message}</p>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* Employment dates */}
+                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                    <div className="space-y-1.5">
+                                        <label
+                                            htmlFor="edit-hireDate"
+                                            className="block text-sm font-medium text-foreground"
+                                        >
+                                            Hire date <span className="font-normal text-muted-foreground">(optional)</span>
+                                        </label>
+                                        <input
+                                            id="edit-hireDate"
+                                            type="date"
+                                            aria-invalid={Boolean(errors.hireDate)}
+                                            className={fieldClasses}
+                                            {...register('hireDate')}
+                                        />
+                                        {errors.hireDate && (
+                                            <p className="text-sm text-danger">{errors.hireDate.message}</p>
+                                        )}
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label
+                                            htmlFor="edit-terminationDate"
+                                            className="block text-sm font-medium text-foreground"
+                                        >
+                                            Termination date <span className="font-normal text-muted-foreground">(optional)</span>
+                                        </label>
+                                        <input
+                                            id="edit-terminationDate"
+                                            type="date"
+                                            aria-invalid={Boolean(errors.terminationDate)}
+                                            className={fieldClasses}
+                                            {...register('terminationDate')}
+                                        />
+                                        {errors.terminationDate && (
+                                            <p className="text-sm text-danger">{errors.terminationDate.message}</p>
+                                        )}
+                                    </div>
                                 </div>
 
                                 {/* Employment type + hourly rate */}

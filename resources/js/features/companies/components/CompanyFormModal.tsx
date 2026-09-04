@@ -53,6 +53,7 @@ const EMPTY_DEFAULTS: CompanyFormInput = {
     country: 'Australia',
     state: '',
     businessType: '',
+    subscriptionId: undefined,
     status: 'active',
 };
 
@@ -72,6 +73,7 @@ function toDefaults(company: Company | null | undefined): CompanyFormInput {
         country: company.country ?? '',
         state: company.state ?? '',
         businessType: company.businessType ?? '',
+        subscriptionId: company.subscriptionId ?? undefined,
         status: company.status,
     };
 }
@@ -349,6 +351,31 @@ export function CompanyFormModal({
                                         <p className="text-sm text-danger">{errors.state.message}</p>
                                     )}
                                 </div>
+                            </div>
+
+                            {/* Subscription id */}
+                            <div className="space-y-1.5">
+                                <label
+                                    htmlFor="subscriptionId"
+                                    className="block text-sm font-medium text-foreground"
+                                >
+                                    Subscription id
+                                </label>
+                                <input
+                                    id="subscriptionId"
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={1}
+                                    placeholder="e.g. 12"
+                                    aria-invalid={Boolean(errors.subscriptionId)}
+                                    className={fieldClasses}
+                                    {...register('subscriptionId')}
+                                />
+                                {errors.subscriptionId && (
+                                    <p className="text-sm text-danger">
+                                        {errors.subscriptionId.message}
+                                    </p>
+                                )}
                             </div>
 
                             {/* Status */}

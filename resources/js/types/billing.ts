@@ -12,6 +12,7 @@ export interface BillingPlan {
     stripeMonthlyPriceId: string | null;
     stripeSixMonthlyPriceId: string | null;
     stripeYearlyPriceId: string | null;
+    stripeProductId: string | null;
     subscriptionsCount: number | null;
 }
 

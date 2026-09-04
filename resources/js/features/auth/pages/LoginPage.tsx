@@ -65,7 +65,7 @@ export function LoginPage({
                 <span>
                     Don&apos;t have an account?{' '}
                     <Link
-                        to="/register"
+                        to="/get-started"
                         className="font-medium text-primary transition-colors hover:text-primary-hover"
                     >
                         Start free trial

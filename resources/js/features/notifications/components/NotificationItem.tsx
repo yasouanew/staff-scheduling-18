@@ -1,5 +1,5 @@
 import { formatDistanceToNow } from 'date-fns';
-import { AlertTriangle, Archive, CalendarCheck, CheckCheck, Clock } from 'lucide-react';
+import { AlertTriangle, Archive, CalendarCheck, CheckCheck, Clock, CreditCard } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 
@@ -40,6 +40,11 @@ export const NOTIFICATION_VISUALS: Record<NotificationType, NotificationVisual> 
         icon: AlertTriangle,
         badgeClasses: 'bg-danger/10 text-danger',
         label: 'Leave rejected',
+    },
+    billing_alert: {
+        icon: CreditCard,
+        badgeClasses: 'bg-info/10 text-info',
+        label: 'Billing',
     },
     system_alert: {
         icon: AlertTriangle,

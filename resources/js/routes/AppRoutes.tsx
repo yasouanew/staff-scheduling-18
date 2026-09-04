@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import {
     Link,
@@ -15,12 +16,12 @@ import { DashboardLayout } from '@/Components/layout/DashboardLayout';
 import { PlaceholderPage } from '@/Components/common/PlaceholderPage';
 import { apiClient, getApiErrorMessage } from '@/lib/api-client';
 import { useAuth } from '@/features/auth/hooks/useAuth';
+import { WEB_SESSION_KEY } from '@/features/auth/hooks/useWebSession';
 
 
 import LandingPage from '@/features/marketing/pages/LandingPage';
 import GetStartedPage from '@/features/marketing/pages/GetStartedPage';
 import { LoginPage } from '@/features/auth/pages/LoginPage';
-import { RegisterPage } from '@/features/auth/pages/RegisterPage';
 import { ForgotPasswordPage } from '@/features/auth/pages/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/features/auth/pages/ResetPasswordPage';
 import {
@@ -35,18 +36,17 @@ import CompanyAdminDashboard from '@/features/dashboard/pages/CompanyAdminDashbo
 import SchedulerDashboard from '@/features/dashboard/pages/SchedulerDashboard';
 import { normalizeWebRole, useWebSession, type WebRole } from '@/features/auth/hooks/useWebSession';
 import EmployeeListPage from '@/features/employees/pages/EmployeeListPage';
-import AvailabilityDashboard from '@/features/availability/pages/AvailabilityDashboard';
 import EmployeeAvailabilityPage from '@/features/availability/pages/EmployeeAvailabilityPage';
 import RosterCalendarPage from '@/features/rosters/pages/RosterCalendarPage';
 import RostersListPage from '@/features/rosters/pages/RostersListPage';
 import RosterDetailPage from '@/features/rosters/pages/RosterDetailPage';
 import ShiftsListPage from '@/features/shifts/pages/ShiftsListPage';
+import ShiftTemplatesListPage from '@/features/shift-templates/pages/ShiftTemplatesListPage';
 import LeaveTypesPage from '@/features/leave-types/pages/LeaveTypesPage';
 import LeaveRequestsListPage from '@/features/leave-requests/pages/LeaveRequestsListPage';
 import LeaveRequestNewPage from '@/features/leave-requests/pages/LeaveRequestNewPage';
 import LeaveRequestDetailPage from '@/features/leave-requests/pages/LeaveRequestDetailPage';
 import NotificationCenterPage from '@/features/notifications/pages/NotificationCenterPage';
-import { SettingsDashboardPage } from '@/features/settings/pages/SettingsDashboardPage';
 import SuperAdminDashboard from '@/features/super-admin/pages/SuperAdminDashboard';
 import CompanyManagementPage from '@/features/super-admin/pages/CompanyManagementPage';
 import SuperAdminCompanyDetailPage from '@/features/super-admin/pages/SuperAdminCompanyDetailPage';
@@ -57,10 +57,12 @@ import SuperAdminPlatformSettingsPage from '@/features/super-admin/pages/SuperAd
 import PlansPage from '@/features/billing/pages/PlansPage';
 import { LockedCompanyPage } from '@/features/billing/pages/LockedCompanyPage';
 import SubscriptionDashboardPage from '@/features/billing/pages/SubscriptionDashboardPage';
+import ProfilePage from '@/features/profile/pages/ProfilePage';
 
 import CompaniesListPage from '@/features/companies/pages/CompaniesListPage';
 import CompanyDetailPage from '@/features/companies/pages/CompanyDetailPage';
 import CompanySettingsPage from '@/features/companies/pages/CompanySettingsPage';
+import CompanySettingsRoute from '@/features/companies/pages/CompanySettingsRoute';
 
 import BranchesListPage from '@/features/branches/pages/BranchesListPage';
 import BranchDetailPage from '@/features/branches/pages/BranchDetailPage';
@@ -106,6 +108,7 @@ function LoginRoute(): JSX.Element {
     const { login } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
+    const queryClient = useQueryClient();
     const [serverError, setServerError] = useState<string | null>(null);
 
     // Return the user to wherever they were headed before the auth redirect,
@@ -120,11 +123,14 @@ function LoginRoute(): JSX.Element {
             onSubmit={async (values) => {
                 setServerError(null);
                 try {
-                    await login({
+                    const user = await login({
                         email: values.email,
                         password: values.password,
                         remember: values.rememberMe ?? false,
                     });
+                    // Seed the authoritative session cache so permission-gated
+                    // routes resolve immediately after login.
+                    queryClient.setQueryData(WEB_SESSION_KEY, user);
                     toast.success('Welcome back! Redirecting to your dashboard.');
                     navigate(redirectTo, { replace: true });
                 } catch (error) {
@@ -140,43 +146,6 @@ function LoginRoute(): JSX.Element {
 }
 
 
-/** Registration screen wired to `POST /auth/register` via the session hook. */
-function RegisterRoute(): JSX.Element {
-    const { register } = useAuth();
-    const navigate = useNavigate();
-    const [serverError, setServerError] = useState<string | null>(null);
-
-    return (
-        <RegisterPage
-            serverError={serverError}
-            onDismissError={() => setServerError(null)}
-            onSubmit={async (values) => {
-                setServerError(null);
-                try {
-                    await register({
-                        name: values.name,
-                        companyName: values.companyName,
-                        email: values.email,
-                        phone: values.phone || undefined,
-                        password: values.password,
-                        passwordConfirmation: values.confirmPassword,
-                    });
-                    toast.success('Account created! Welcome to your new workspace.');
-                    navigate('/dashboard', { replace: true });
-                } catch (error) {
-                    // Surface the real server message: validation (422, e.g. email
-                    // already taken) or rate limiting (429).
-                    setServerError(
-                        getApiErrorMessage(
-                            error,
-                            'We could not create your account. Please try again.',
-                        ),
-                    );
-                }
-            }}
-        />
-    );
-}
 
 /** Forgot-password screen wired to `POST /auth/forgot-password`. */
 function ForgotPasswordRoute(): JSX.Element {
@@ -367,7 +336,6 @@ export function AppRoutes(): JSX.Element {
             <Route path="/" element={<LandingPage />} />
             <Route path="/get-started" element={<GetStartedPage />} />
             <Route path="/login" element={<LoginRoute />} />
-            <Route path="/register" element={<RegisterRoute />} />
             <Route path="/forgot-password" element={<ForgotPasswordRoute />} />
             <Route path="/reset-password" element={<ResetPasswordRoute />} />
             <Route path="/verify-email" element={<VerifyEmailRoute />} />
@@ -390,6 +358,10 @@ export function AppRoutes(): JSX.Element {
                         <Route path="/super-admin" element={<SuperAdminDashboard />} />
                         <Route path="/super-admin/companies" element={<CompanyManagementPage />} />
                         <Route path="/super-admin/companies/:id" element={<SuperAdminCompanyDetailPage />} />
+                        <Route
+                            path="/super-admin/companies/:id/settings"
+                            element={<CompanySettingsPage basePath="/super-admin/companies" />}
+                        />
                         <Route path="/super-admin/plans" element={<PlansPage />} />
                         <Route path="/super-admin/subscriptions" element={<SuperAdminSubscriptionsPage />} />
                         <Route path="/super-admin/payments" element={<SuperAdminPaymentsPage />} />
@@ -408,23 +380,24 @@ export function AppRoutes(): JSX.Element {
                         <Route path="/positions" element={<PositionsListPage />} />
                         <Route path="/leave-types" element={<LeaveTypesPage />} />
                         <Route path="/leave-requests/new" element={<LeaveRequestNewPage />} />
-                        <Route path="/settings" element={<SettingsDashboardPage />} />
+                        <Route path="/settings" element={<CompanySettingsRoute />} />
                     </Route>
 
                     <Route element={<RoleRoute roles={['company_admin', 'scheduler']} />}>
                         <Route path="/employees" element={<EmployeeListPage />} />
                         <Route path="/employees/:id/availability" element={<EmployeeAvailabilityPage />} />
-                        <Route path="/availability" element={<AvailabilityDashboard />} />
                         <Route path="/rosters" element={<RosterCalendarPage />} />
                         <Route path="/rosters/list" element={<RostersListPage />} />
                         <Route path="/rosters/:id" element={<RosterDetailPage />} />
                         <Route path="/shifts" element={<ShiftsListPage />} />
+                        <Route path="/shift-templates" element={<ShiftTemplatesListPage />} />
                         <Route path="/leave-requests" element={<LeaveRequestsListPage />} />
                         <Route path="/leave-requests/:id" element={<LeaveRequestDetailPage />} />
                     </Route>
 
                     <Route element={<RoleRoute roles={['super_admin', 'company_admin', 'scheduler']} />}>
                         <Route path="/notifications" element={<NotificationCenterPage />} />
+                        <Route path="/profile" element={<ProfilePage />} />
                     </Route>
                 </Route>
             </Route>

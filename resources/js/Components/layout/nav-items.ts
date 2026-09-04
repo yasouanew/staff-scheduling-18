@@ -3,8 +3,8 @@ import {
     BriefcaseBusiness,
     Building,
     Building2,
-    CalendarClock,
     CalendarDays,
+    CalendarRange,
     CalendarX,
     Clock,
     CreditCard,
@@ -50,8 +50,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
 
     { label: 'Rosters', to: '/rosters', icon: CalendarDays, section: 'Scheduling', roles: COMPANY_ROLES },
     { label: 'Shifts', to: '/shifts', icon: Clock, section: 'Scheduling', roles: COMPANY_ROLES },
+    { label: 'Shift Templates', to: '/shift-templates', icon: CalendarRange, section: 'Scheduling', roles: COMPANY_ROLES },
     { label: 'Employees', to: '/employees', icon: Users, section: 'Scheduling', roles: COMPANY_ROLES },
-    { label: 'Availability', to: '/availability', icon: CalendarClock, section: 'Scheduling', roles: COMPANY_ROLES },
     { label: 'Leave Requests', to: '/leave-requests', icon: CalendarX, section: 'Scheduling', roles: COMPANY_ROLES },
     { label: 'Leave Types', to: '/leave-types', icon: CalendarDays, section: 'Scheduling', roles: COMPANY_ADMIN_ONLY },
 

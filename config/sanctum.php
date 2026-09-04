@@ -48,9 +48,14 @@ return [
     | considered expired. This will override any values set in the token's
     | "expires_at" attribute, but first-party sessions are not affected.
     |
+    | Token lifetime is enforced on the SERVER using the application clock
+    | (see Sanctum\Guard), so a client changing its device clock cannot keep a
+    | revoked or expired session alive. Set SANCTUM_TOKEN_TTL_MINUTES to 0 or
+    | null to disable expiration (not recommended).
+    |
     */
 
-    'expiration' => null,
+    'expiration' => env('SANCTUM_TOKEN_TTL_MINUTES', 1440),
 
     /*
     |--------------------------------------------------------------------------

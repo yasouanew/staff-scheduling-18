@@ -27,8 +27,13 @@ import { cn } from '@/lib/utils';
 import type { Company, CompanyStatus } from '@/types/company';
 import { COMPANY_STATUS_LABELS } from '@/types/company';
 
-import { useTenantCompanies } from '../hooks/useSuperAdmin';
+import {
+    usePlatformMetrics,
+    useSuspendedTenantCount,
+    useTenantCompanies,
+} from '../hooks/useSuperAdmin';
 import { useUpdateCompanyStatus } from '@/features/companies/hooks/useCompanies';
+import { Pagination } from '@/Components/ui/pagination';
 
 /** Dedicated client so the ledger works standalone. */
 const queryClient = new QueryClient({
@@ -330,22 +335,20 @@ const columns: ColumnDef<Company>[] = [
 
 /** Inner ledger view (relies on an ancestor QueryClientProvider). */
 function CompanyLedger(): JSX.Element {
-    const { data, isLoading, isError, refetch } = useTenantCompanies();
-    const companies = useMemo(() => data ?? [], [data]);
+    const [page, setPage] = useState(1);
+    const { data, isLoading, isError, refetch } = useTenantCompanies(page);
+    const { data: suspendedCount } = useSuspendedTenantCount();
+    const { data: platform } = usePlatformMetrics();
 
-    const counts = useMemo(
-        () =>
-            companies.reduce(
-                (acc, company) => {
-                    acc.total += 1;
-                    if (company.status === 'active') acc.active += 1;
-                    if (company.status === 'suspended') acc.suspended += 1;
-                    return acc;
-                },
-                { total: 0, active: 0, suspended: 0 },
-            ),
-        [companies],
-    );
+    const companies = useMemo(() => data?.data ?? [], [data]);
+    const pageCount = data?.lastPage ?? 1;
+
+    // Authoritative totals come from real backend sources — never from the
+    // paginated slice: `meta.total` of `GET /companies`, the platform snapshot
+    // (`GET /dashboard/overview`) and the suspended filter query
+    // (`GET /companies?status=suspended`).
+    const totalCount = data?.total ?? 0;
+    const activeCount = platform?.stats.activeCompanies ?? 0;
 
     return (
         <div className="space-y-6">
@@ -362,7 +365,7 @@ function CompanyLedger(): JSX.Element {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <StatCard
                     title="Total Companies"
-                    value={counts.total}
+                    value={totalCount}
                     icon={Building2}
                     tone="primary"
                     description="On the platform"
@@ -370,7 +373,7 @@ function CompanyLedger(): JSX.Element {
                 />
                 <StatCard
                     title="Active Companies"
-                    value={counts.active}
+                    value={activeCount}
                     icon={CheckCircle2}
                     tone="success"
                     description="Currently active"
@@ -378,7 +381,7 @@ function CompanyLedger(): JSX.Element {
                 />
                 <StatCard
                     title="Suspended"
-                    value={counts.suspended}
+                    value={suspendedCount ?? 0}
                     icon={Ban}
                     tone="danger"
                     description="Access paused"
@@ -408,13 +411,18 @@ function CompanyLedger(): JSX.Element {
                     </button>
                 </div>
             ) : (
-                <DataTable<Company, unknown>
-                    columns={columns}
-                    data={companies}
-                    searchKey="name"
-                    searchPlaceholder="Search companies..."
-                    isLoading={isLoading}
-                />
+                <div className="space-y-4">
+                    <DataTable<Company, unknown>
+                        columns={columns}
+                        data={companies}
+                        searchKey="name"
+                        searchPlaceholder="Search companies..."
+                        isLoading={isLoading}
+                    />
+                    {pageCount > 1 && (
+                        <Pagination page={page} pageCount={pageCount} onPageChange={setPage} />
+                    )}
+                </div>
             )}
         </div>
     );

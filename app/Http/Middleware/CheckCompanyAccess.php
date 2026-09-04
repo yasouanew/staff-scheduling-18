@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\AccessStateService;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -12,7 +13,18 @@ class CheckCompanyAccess
      * Allow operational requests only when the company has a valid trial or an
      * active subscription. Billing, session, and webhook routes are deliberately
      * kept outside this middleware so a locked company can reactivate itself.
+     *
+     * The decision is delegated to the authoritative {@see AccessStateService},
+     * which compares every expiry boundary against the server clock — a client
+     * changing its device clock/date can never re-open (or extend) access.
      */
+    protected AccessStateService $access;
+
+    public function __construct(AccessStateService $access)
+    {
+        $this->access = $access;
+    }
+
     public function handle(Request $request, Closure $next): Response
     {
         $user = $request->user();
@@ -37,7 +49,7 @@ class CheckCompanyAccess
             ], 403);
         }
 
-        if ($company->isTrialActive() || $company->activeSubscription()) {
+        if ($this->access->hasAccess($company)) {
             if ($company->locked_at !== null) {
                 $company->forceFill(['locked_at' => null])->save();
             }
@@ -53,9 +65,9 @@ class CheckCompanyAccess
             'success' => false,
             'message' => 'Your trial has ended. Activate a subscription to continue using Rosterly.',
             'code' => 'SUBSCRIPTION_REQUIRED',
-            'data' => [
+            'data' => $this->access->toArray($company) + [
                 'is_locked' => true,
-                'trial_ends_at' => $company->trial_ends_at?->toIso8601String(),
+                'locked_at' => $company->locked_at?->toIso8601String(),
             ],
         ], 423);
     }

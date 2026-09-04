@@ -36,6 +36,18 @@ class EntitlementService
     private const ENTITLED_STATUSES = ['trialing', 'active'];
 
     /**
+     * The single authoritative resolver for "does this company have access now?".
+     *
+     * Every subscription/trial entitlement decision in the codebase goes through
+     * this service so there is exactly one rule and one clock (the server's)
+     * deciding access. Client-supplied timestamps are never consulted.
+     */
+    protected function accessState(): AccessStateService
+    {
+        return app(AccessStateService::class);
+    }
+
+    /**
      * Whether the given business currently grants access to a feature.
      *
      * When a branch is provided and the feature is branch-scoped, the branch
@@ -162,13 +174,15 @@ class EntitlementService
      */
     public function hasEntitledSubscription(Company $company): bool
     {
-        return $this->entitledSubscription($company) !== null;
+        return $this->accessState()->hasEntitledSubscription($company);
     }
 
     /**
      * The entitled subscription for the business, or null.
      *
-     * Resolution order follows the existing billing rules and mirrors
+     * Delegated to {@see AccessStateService::entitledSubscription()} so the
+     * resolution order, the server clock, and the skew buffer are shared with
+     * every other access check in the application. Resolution order mirrors
      * `SubscriptionStatus::grantsAccess()`:
      *  - an active subscription whose period has not ended is entitled;
      *  - a trialing subscription is entitled while the trial is running;
@@ -179,31 +193,7 @@ class EntitlementService
      */
     public function entitledSubscription(Company $company): ?Subscription
     {
-        return $company->subscriptions()
-            ->where(function ($query): void {
-                // Active subscriptions grant access while their period is live.
-                $query->where('status', 'active')
-                    ->where(function ($period): void {
-                        $period->whereNull('ends_at')->orWhere('ends_at', '>', now());
-                    });
-            })
-            ->orWhere(function ($query): void {
-                // Trialing subscriptions grant access while the trial is running.
-                $query->where('status', 'trialing')
-                    ->where(function ($trial): void {
-                        $trial->whereNull('trial_ends_at')->orWhere('trial_ends_at', '>', now());
-                    });
-            })
-            ->orWhere(function ($query): void {
-                // Grace-period subscriptions keep access for the configurable
-                // window after a payment failure before suspension.
-                $query->where('status', 'grace_period')
-                    ->where(function ($grace): void {
-                        $grace->whereNull('grace_ends_at')->orWhere('grace_ends_at', '>', now());
-                    });
-            })
-            ->latest('starts_at')
-            ->first();
+        return $this->accessState()->entitledSubscription($company);
     }
 
     /**

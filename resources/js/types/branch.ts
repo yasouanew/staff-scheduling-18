@@ -136,6 +136,8 @@ export interface Branch {
 
     /** Owning company name (present when the relation is loaded). */
     companyName: string | null;
+    /** Number of employees linked to this branch (present when counted by the API). */
+    employeesCount: number | null;
     /** Number of linked user accounts (present when counted by the API). */
     usersCount: number | null;
     /** Number of shifts scheduled at this branch (present when counted). */

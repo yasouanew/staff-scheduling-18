@@ -1,4 +1,4 @@
-import { CreditCard, LogOut, Menu, Settings, User } from 'lucide-react';
+import { CircleUserRound, CreditCard, LogOut, Menu, Settings } from 'lucide-react';
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 
@@ -88,11 +88,16 @@ export function Header({ user, onMenuClick, onSignOut }: HeaderProps): JSX.Eleme
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem asChild>
-                        <Link to="/settings/profile"><User className="h-4 w-4" aria-hidden="true" />Profile</Link>
+                        <Link to="/profile"><CircleUserRound className="h-4 w-4" aria-hidden="true" />Profile</Link>
                     </DropdownMenuItem>
-                    <DropdownMenuItem asChild>
-                        <Link to="/settings"><Settings className="h-4 w-4" aria-hidden="true" />Settings</Link>
-                    </DropdownMenuItem>
+                    {user.role === 'company_admin' ? (
+                        <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem asChild>
+                                <Link to="/settings"><Settings className="h-4 w-4" aria-hidden="true" />Settings</Link>
+                            </DropdownMenuItem>
+                        </>
+                    ) : null}
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={onSignOut} className="text-destructive focus:bg-destructive/10 focus:text-destructive">
                         <LogOut className="h-4 w-4" aria-hidden="true" />Sign out

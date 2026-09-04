@@ -53,12 +53,18 @@ export interface Company {
     status: CompanyStatus;
     /** Linked subscription id, when a plan is active. */
     subscriptionId: number | null;
+    /** ISO-8601 timestamp of when the trial period ends. */
+    trialEndsAt: string | null;
+    /** ISO-8601 timestamp of when access was locked (billing), if locked. */
+    lockedAt: string | null;
     /** Number of branches (present when counted by the API). */
     branchesCount: number | null;
     /** Number of employees (present when counted by the API). */
     employeesCount: number | null;
     /** Number of linked user accounts (present when counted by the API). */
     usersCount: number | null;
+    /** Operational + localisation settings, when loaded by the API. */
+    settings: CompanySettings | null;
     /** ISO-8601 creation timestamp. */
     createdAt: string | null;
     /** ISO-8601 last-updated timestamp. */

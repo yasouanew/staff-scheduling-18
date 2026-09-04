@@ -54,6 +54,27 @@ const optionalTime = z
     });
 
 /**
+ * An optional decimal coordinate.
+ *
+ * Number inputs yield strings and an empty field must stay distinguishable
+ * from a deliberate `0` (the equator / prime meridian are valid coordinates),
+ * so the value is normalised to a number only when it is non-empty. The range
+ * caps mirror the backend rules: latitude -90..90, longitude -180..180.
+ */
+const optionalCoordinate = (min: number, max: number, fieldLabel: string) =>
+    z
+        .union([z.string(), z.number()])
+        .optional()
+        .transform((value) => {
+            if (value === undefined || value === '') return undefined;
+            const parsed = typeof value === 'number' ? value : Number(value);
+            return Number.isNaN(parsed) ? undefined : parsed;
+        })
+        .refine((value) => value === undefined || (value >= min && value <= max), {
+            message: `${fieldLabel} must be between ${min} and ${max}.`,
+        });
+
+/**
  * An optional break length in minutes.
  *
  * Accepts a string because number inputs yield strings, and an empty field must
@@ -143,6 +164,8 @@ export const branchFormSchema = z.object({
         .or(z.literal(''))
         .transform((value) => (value ? value : undefined)),
     address: optionalTrimmed(1000),
+    latitude: optionalCoordinate(-90, 90, 'Latitude'),
+    longitude: optionalCoordinate(-180, 180, 'Longitude'),
     timezone: z
         .enum(toEnumValues(TIMEZONE_OPTIONS as unknown as [string, ...string[]]))
         .refine((value) => Boolean(value), { message: 'Timezone is required.' }),

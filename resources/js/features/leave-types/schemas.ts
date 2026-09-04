@@ -2,6 +2,13 @@ import { z } from 'zod';
 
 import { LEAVE_TYPE_STATUSES } from '@/types/leave-type';
 
+/** 6-digit hex colour accepted by the backend `color` rule. */
+const hexColour = z
+    .string()
+    .trim()
+    .regex(/^#([A-Fa-f0-9]{6})$/, 'Enter a valid 6-digit hex colour, e.g. #F59E0B.')
+    .nullable();
+
 /** Form validation for leave types offered in employee leave requests. */
 export const leaveTypeFormSchema = z
     .object({
@@ -28,6 +35,7 @@ export const leaveTypeFormSchema = z
             .min(1, 'Maximum days per request must be at least one day.')
             .max(365, 'Maximum days per request cannot exceed 365 days.')
             .nullable(),
+        color: hexColour,
         status: z.enum(LEAVE_TYPE_STATUSES),
     })
     .superRefine((values, context) => {

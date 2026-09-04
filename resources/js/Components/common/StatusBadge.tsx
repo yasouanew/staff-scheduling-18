@@ -12,6 +12,7 @@ const STATUS_MAP: Record<EmployeeStatus, { label: string; tone: BadgeTone; dot: 
     active: { label: 'Active', tone: 'success', dot: 'bg-success' },
     pending: { label: 'Pending', tone: 'warning', dot: 'bg-warning' },
     inactive: { label: 'Inactive', tone: 'neutral', dot: 'bg-muted-foreground' },
+    terminated: { label: 'Terminated', tone: 'danger', dot: 'bg-danger' },
 };
 
 /**

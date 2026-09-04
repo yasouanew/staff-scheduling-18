@@ -15,6 +15,8 @@ use App\Http\Requests\Auth\ConfirmPasswordRequest;
 use App\Http\Requests\Auth\ForgotPasswordRequest;
 use App\Http\Requests\Auth\LogoutRequest;
 use App\Http\Requests\Auth\ResetPasswordRequest;
+use App\Http\Requests\Auth\UpdatePasswordRequest;
+use App\Http\Requests\Auth\UpdateProfileRequest;
 use App\Http\Resources\UserResource;
 use App\Traits\ApiResponse;
 use Illuminate\Auth\AuthenticationException;
@@ -83,6 +85,48 @@ class AuthController extends Controller
             new UserResource($request->user()->load(['roles', 'employee'])),
             'Authenticated user retrieved.'
         );
+    }
+
+    /**
+     * Update the authenticated user's profile (name and email).
+     *
+     * Mirrors the built-in web `ProfileController@update`: changing the email
+     * address invalidates the email verification timestamp so the new address
+     * must be verified again.
+     */
+    public function updateProfile(UpdateProfileRequest $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $user->fill($request->validated());
+
+        if ($user->isDirty('email')) {
+            $user->email_verified_at = null;
+        }
+
+        $user->save();
+
+        return $this->successResponse(
+            new UserResource($user->fresh()->load(['roles', 'employee'])),
+            'Profile updated successfully.'
+        );
+    }
+
+    /**
+     * Update the authenticated user's password.
+     *
+     * The new password is validated against the shared password policy; the new
+     * password is applied directly (no current-password re-authentication).
+     */
+    public function updatePassword(UpdatePasswordRequest $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $user->update([
+            'password' => $request->validated('password'),
+        ]);
+
+        return $this->successResponse(null, 'Password updated successfully.');
     }
 
     /**

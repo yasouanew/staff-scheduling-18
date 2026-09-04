@@ -7,7 +7,7 @@
  */
 
 /** Employment lifecycle state used to drive status badges. */
-export type EmployeeStatus = 'active' | 'pending' | 'inactive';
+export type EmployeeStatus = 'active' | 'pending' | 'inactive' | 'terminated';
 
 /**
  * Operational department an employee belongs to.
@@ -95,6 +95,27 @@ export interface Employee {
     role: EmployeeRole | null;
     /** Onboarding invitation state, or `null` when never invited. */
     invitation: EmployeeInvitation | null;
+
+    /* ---- Profile fields exposed by EmployeeResource (missing before) ---- */
+
+    /** Company-assigned staff identifier, or `null` when not recorded. */
+    employeeNumber: string | null;
+    /** Contact phone number, or `null` when not recorded. */
+    phone: string | null;
+    /** Date of birth (yyyy-MM-dd), or `null` when not recorded. */
+    dob: string | null;
+    /** Gender, or `null` when not recorded. */
+    gender: string | null;
+    /** Postal/residential address, or `null` when not recorded. */
+    address: string | null;
+    /** Emergency contact name, or `null` when not recorded. */
+    emergencyContact: string | null;
+    /** Emergency contact phone, or `null` when not recorded. */
+    emergencyPhone: string | null;
+    /** Date the employee joined (yyyy-MM-dd), or `null` when not recorded. */
+    hireDate: string | null;
+    /** Date employment ended (yyyy-MM-dd), or `null` when still employed. */
+    terminationDate: string | null;
 }
 
 /**
@@ -103,7 +124,7 @@ export interface Employee {
  * Mirrors the backend's `employment_type` enum so the edit form can never submit
  * a value the API would reject.
  */
-export type EmploymentType = 'full_time' | 'part_time' | 'casual' | 'contract';
+export type EmploymentType = 'full_time' | 'part_time' | 'casual' | 'contract' | 'contractor';
 
 /** Selectable employment types, ordered most → least common. */
 export const EMPLOYMENT_TYPES: readonly EmploymentType[] = [
@@ -111,6 +132,7 @@ export const EMPLOYMENT_TYPES: readonly EmploymentType[] = [
     'part_time',
     'casual',
     'contract',
+    'contractor',
 ] as const;
 
 /** Human-readable labels for {@link EmploymentType}. */
@@ -119,6 +141,7 @@ export const EMPLOYMENT_TYPE_LABELS: Record<EmploymentType, string> = {
     part_time: 'Part time',
     casual: 'Casual',
     contract: 'Contract',
+    contractor: 'Contractor',
 };
 
 /** Selectable employment statuses for the edit form. */
@@ -126,6 +149,7 @@ export const EMPLOYEE_STATUSES: readonly EmployeeStatus[] = [
     'active',
     'pending',
     'inactive',
+    'terminated',
 ] as const;
 
 /** Human-readable labels for {@link EmployeeStatus}. */
@@ -133,6 +157,7 @@ export const EMPLOYEE_STATUS_LABELS: Record<EmployeeStatus, string> = {
     active: 'Active',
     pending: 'Pending',
     inactive: 'Inactive',
+    terminated: 'Terminated',
 };
 
 
@@ -193,6 +218,12 @@ export interface CreateEmployeeInput {
     departmentId: string;
     /** Branch the new employee is assigned to (empty string = unassigned). */
     branchId: string;
+    /** Contact phone number (empty string = not recorded). */
+    phone: string;
+    /** Employment basis; the backend defaults to `full_time` when omitted. */
+    employmentType: EmploymentType;
+    /** Payroll rate per hour as typed, or empty string when not recorded. */
+    hourlyRate: string;
 }
 
 
@@ -220,6 +251,28 @@ export interface UpdateEmployeeInput {
     hourlyRate: string;
     /** Employment lifecycle state. */
     status: EmployeeStatus;
+    /** Company-assigned staff identifier (empty string = not recorded). */
+    employeeNumber: string;
+    /**
+     * Date of birth (yyyy-MM-dd), or empty string when not recorded.
+     *
+     * Note: `phone` is intentionally not part of the update payload — it lives on
+     * the linked user record and `UpdateEmployeeRequest` has no rule for it, so
+     * it is only settable when (re)sending an invitation.
+     */
+    dob: string;
+    /** Gender, or empty string when not recorded. */
+    gender: string;
+    /** Postal/residential address (empty string = not recorded). */
+    address: string;
+    /** Emergency contact name (empty string = not recorded). */
+    emergencyContact: string;
+    /** Emergency contact phone (empty string = not recorded). */
+    emergencyPhone: string;
+    /** Date the employee joined (yyyy-MM-dd), or empty string. */
+    hireDate: string;
+    /** Date employment ended (yyyy-MM-dd), or empty string. */
+    terminationDate: string;
 }
 
 /**

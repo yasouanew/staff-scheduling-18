@@ -227,6 +227,54 @@ export function BranchFormModal({
                                 )}
                             </div>
 
+                            {/* Coordinates (optional, backed by `latitude` / `longitude`) */}
+                            <div className="grid gap-4 sm:grid-cols-2">
+                                <div className="space-y-1.5">
+                                    <label
+                                        htmlFor="latitude"
+                                        className="block text-sm font-medium text-foreground"
+                                    >
+                                        Latitude
+                                    </label>
+                                    <input
+                                        id="latitude"
+                                        type="number"
+                                        step="any"
+                                        min="-90"
+                                        max="90"
+                                        placeholder="e.g. -33.8688"
+                                        aria-invalid={Boolean(errors.latitude)}
+                                        className={fieldClasses}
+                                        {...register('latitude')}
+                                    />
+                                    {errors.latitude && (
+                                        <p className="text-sm text-danger">{errors.latitude.message}</p>
+                                    )}
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label
+                                        htmlFor="longitude"
+                                        className="block text-sm font-medium text-foreground"
+                                    >
+                                        Longitude
+                                    </label>
+                                    <input
+                                        id="longitude"
+                                        type="number"
+                                        step="any"
+                                        min="-180"
+                                        max="180"
+                                        placeholder="e.g. 151.2093"
+                                        aria-invalid={Boolean(errors.longitude)}
+                                        className={fieldClasses}
+                                        {...register('longitude')}
+                                    />
+                                    {errors.longitude && (
+                                        <p className="text-sm text-danger">{errors.longitude.message}</p>
+                                    )}
+                                </div>
+                            </div>
+
                             {/* Timezone (required) */}
                             <div className="space-y-1.5">
                                 <label htmlFor="timezone" className="block text-sm font-medium text-foreground">

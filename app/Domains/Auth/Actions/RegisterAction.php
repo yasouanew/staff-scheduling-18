@@ -59,7 +59,13 @@ class RegisterAction
             // Grant the tenant owner the full company_admin permission set.
             $user->syncRoles('company_admin');
 
-            $token = $user->createToken($deviceName)->plainTextToken;
+            // Issue a token with a server-computed expiry so a device whose
+            // clock is wrong/manipulated cannot extend the session lifetime.
+            $token = $user->createToken(
+                $deviceName,
+                ['*'],
+                now()->addMinutes((int) config('sanctum.expiration', 1440))
+            )->plainTextToken;
 
             $user->forceFill(['last_login_at' => now()])->save();
 

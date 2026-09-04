@@ -30,7 +30,14 @@ class LoginAction
         }
 
         // Issue a fresh personal access token for this device.
-        $token = $user->createToken($deviceName)->plainTextToken;
+        // The explicit expires_at is computed on the server (never trusted from
+        // the client) so a device with a manipulated clock cannot keep the
+        // session alive past its server-authoritative lifetime.
+        $token = $user->createToken(
+            $deviceName,
+            ['*'],
+            now()->addMinutes((int) config('sanctum.expiration', 1440))
+        )->plainTextToken;
 
         // Track last login timestamp.
         $user->forceFill(['last_login_at' => now()])->save();

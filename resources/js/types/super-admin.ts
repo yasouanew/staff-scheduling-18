@@ -69,11 +69,6 @@ export interface PlanDistributionSlice {
 /** The platform master snapshot rendered on the Super Admin dashboard. */
 export interface PlatformMetrics {
     stats: PlatformStats;
-    totalTenants: number;
-    activeTenants: number;
-    suspendedTenants: number;
-    /** Combined employees across every tenant. */
-    employeesScheduled: number;
     planDistribution: PlanDistributionSlice[];
     /** Most recently created companies (from the platform overview). */
     recentCompanies: RecentCompanyDto[];

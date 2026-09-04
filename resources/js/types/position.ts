@@ -36,6 +36,7 @@ export const POSITION_STATUS_LABELS: Record<PositionStatus, string> = {
  * not Tailwind styling — so hard-coded hex here is intentional and permitted.
  */
 export const POSITION_COLOR_OPTIONS = [
+    '#3B82F6', // blue (backend default)
     '#2563EB', // blue
     '#7C3AED', // violet
     '#DB2777', // pink
@@ -47,7 +48,7 @@ export const POSITION_COLOR_OPTIONS = [
     '#4B5563', // gray
 ] as const;
 
-/** Default colour applied to a brand-new position. */
+/** Default colour applied to a brand-new position (matches backend default `#3B82F6`). */
 export const DEFAULT_POSITION_COLOR = POSITION_COLOR_OPTIONS[0];
 
 /* -------------------------------------------------------------------------- */

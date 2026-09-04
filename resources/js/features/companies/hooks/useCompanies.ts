@@ -59,10 +59,13 @@ interface CompanyDto {
     state: string | null;
     business_type: string | null;
     status: string | null;
+    trial_ends_at: string | null;
+    locked_at: string | null;
     subscription_id: number | null;
     branches_count?: number;
     employees_count?: number;
     users_count?: number;
+    settings?: CompanySettingsDto | null;
     created_at: string | null;
     updated_at: string | null;
 }
@@ -134,9 +137,12 @@ function mapCompany(dto: CompanyDto): Company {
         businessType: dto.business_type,
         status: normalizeStatus(dto.status),
         subscriptionId: dto.subscription_id,
+        trialEndsAt: dto.trial_ends_at,
+        lockedAt: dto.locked_at,
         branchesCount: dto.branches_count ?? null,
         employeesCount: dto.employees_count ?? null,
         usersCount: dto.users_count ?? null,
+        settings: dto.settings ? mapSettings(dto.settings) : null,
         createdAt: dto.created_at,
         updatedAt: dto.updated_at,
     };
@@ -210,6 +216,7 @@ function toCompanyPayload(values: CompanyFormValues): Record<string, unknown> {
         state: values.state ?? null,
         business_type: values.businessType ?? null,
         status: values.status,
+        subscription_id: values.subscriptionId ?? null,
     };
 }
 
@@ -228,6 +235,7 @@ function toSettingsPayload(values: CompanySettingsFormValues): Record<string, un
         allow_employee_availability: values.allowEmployeeAvailability,
         allow_leave_requests: values.allowLeaveRequests,
         allow_push_notifications: values.allowPushNotifications,
+        logo: values.logo ?? null,
         primary_color: values.primaryColor ?? null,
         secondary_color: values.secondaryColor ?? null,
     };

@@ -31,8 +31,8 @@ interface BranchMutationDto {
         branch_usage: Array<{
             branch_id?: number;
             id?: number;
-            name: string;
-            active: boolean;
+            name?: string | null;
+            active?: boolean;
             employees_used: number;
             capacity?: number | null;
             employee_capacity?: number | null;
@@ -55,8 +55,12 @@ function mapUsage(dto: BranchMutationDto['usage']): SubscriptionUsage {
             const capacity = item.employee_capacity ?? item.capacity ?? null;
             return {
                 id: id === undefined || id === null ? '' : String(id),
-                name: item.name,
-                active: item.active,
+                // The mutation endpoints (`UsageService::usageFor()`) report only
+                // `branch_id / employees_used / capacity / remaining` — there is no
+                // `name`/`active`. The richer shape is produced by the dedicated
+                // GET /subscription/usage endpoint, so these default to placeholders.
+                name: item.name ?? '',
+                active: item.active ?? false,
                 employeesUsed: number(item.employees_used),
                 employeeCapacity: capacity === null ? null : number(capacity),
                 remaining: item.remaining === null ? null : number(item.remaining),
@@ -70,7 +74,7 @@ export interface BranchBillingResult {
     employeeCapacity: number | null;
 }
 
-/** Shared success handler that seeds the summary/usage caches from a mutation. */
+/** Shared success handler that seeds the summary cache from a mutation. */
 function refreshUsage(queryClient: ReturnType<typeof useQueryClient>, result: BranchBillingResult): void {
     const summary = queryClient.getQueryData(SUBSCRIPTION_KEYS.summary);
     if (summary) {
@@ -79,7 +83,12 @@ function refreshUsage(queryClient: ReturnType<typeof useQueryClient>, result: Br
             usage: result.usage,
         });
     }
-    queryClient.setQueryData(SUBSCRIPTION_KEYS.usage, result.usage);
+    // The mutation payloads carry the name-less `branch_usage` shape
+    // (`UsageService::usageFor()`), whereas `useUsageOverview` (GET
+    // /subscription/usage) reads a *different* shape (`branches_usage` with
+    // `name`/`active`). Instead of seeding that cache with an incompatible
+    // object, invalidate it so the proper endpoint is refetched.
+    void queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.usage });
 }
 
 /**

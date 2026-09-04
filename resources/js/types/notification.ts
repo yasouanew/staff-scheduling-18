@@ -4,6 +4,7 @@ export const NOTIFICATION_TYPES = [
     'leave_requested',
     'leave_approved',
     'leave_rejected',
+    'billing_alert',
     'system_alert',
 ] as const;
 

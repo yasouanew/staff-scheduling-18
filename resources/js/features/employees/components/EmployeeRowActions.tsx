@@ -1,4 +1,4 @@
-import { CalendarClock, MailPlus, MoreHorizontal, Pencil } from 'lucide-react';
+import { CalendarClock, MailPlus, MoreHorizontal, Pencil, UserX } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import {
@@ -19,6 +19,8 @@ interface EmployeeRowActionsProps {
     onEdit: (employee: Employee) => void;
     /** Opens the send-invitation dialog for this employee. */
     onSendInvite: (employee: Employee) => void;
+    /** Opens the revoke-invitation confirmation for this employee. */
+    onRevokeInvite: (employee: Employee) => void;
 }
 
 /**
@@ -35,6 +37,7 @@ export function EmployeeRowActions({
     employee,
     onEdit,
     onSendInvite,
+    onRevokeInvite,
 }: EmployeeRowActionsProps): JSX.Element {
     const navigate = useNavigate();
 
@@ -43,6 +46,11 @@ export function EmployeeRowActions({
     // Re-inviting someone who has already onboarded would reset their access, so
     // the item is disabled once the invitation has been accepted.
     const hasAccepted = employee.invitation?.status === 'accepted';
+
+    // Revoking only makes sense for an outstanding invitation: an accepted one is
+    // already inert (the person has onboarded), and an expired one has no live
+    // secret left to cancel. Mirrors the backend's `isPending()` semantics.
+    const isPending = employee.invitation?.status === 'pending';
 
     return (
         <DropdownMenu>
@@ -77,6 +85,16 @@ export function EmployeeRowActions({
                     <MailPlus aria-hidden="true" className="mr-2 size-4" />
                     {hasAccepted ? 'Invite accepted' : inviteLabel}
                 </DropdownMenuItem>
+
+                {isPending && (
+                    <DropdownMenuItem
+                        onSelect={() => onRevokeInvite(employee)}
+                        className="text-danger focus:bg-danger/10 focus:text-danger"
+                    >
+                        <UserX aria-hidden="true" className="mr-2 size-4" />
+                        Revoke invite
+                    </DropdownMenuItem>
+                )}
 
                 <DropdownMenuSeparator />
 

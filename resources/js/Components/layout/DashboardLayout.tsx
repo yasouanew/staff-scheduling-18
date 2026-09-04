@@ -48,12 +48,23 @@ export function DashboardLayout({ user = DEFAULT_USER, onSignOut }: DashboardLay
     const session = useWebSession();
     const role = normalizeWebRole(session.data);
     const navItems = navigationForRole(role);
+    // The header trial badge should only appear while the company is genuinely
+    // on its registration trial. `company_access.trial_is_active` reflects the
+    // company's trial window and stays true even after a subscription activates,
+    // so once there is an active subscription the badge is suppressed — a paying
+    // customer should never see a lingering "trial days left" pill.
+    const hasActiveSubscription = session.data?.company_access?.active_subscription_id !== null
+        && session.data?.company_access?.active_subscription_id !== undefined;
+
     const headerUser: HeaderUser = session.data
         ? {
             name: session.data.name,
             email: session.data.email,
             companyId: session.data.company_id ? String(session.data.company_id) : undefined,
-            trialEndsAt: session.data.company_access?.trial_is_active ? session.data.company_access.trial_ends_at : null,
+            trialEndsAt:
+                !hasActiveSubscription && session.data.company_access?.trial_is_active
+                    ? session.data.company_access.trial_ends_at
+                    : null,
             role: role ?? undefined,
         }
         : user;

@@ -35,6 +35,7 @@ export const DEPARTMENT_STATUS_LABELS: Record<DepartmentStatus, string> = {
  * not Tailwind styling — so hard-coded hex here is intentional and permitted.
  */
 export const DEPARTMENT_COLOR_OPTIONS = [
+    '#6366F1', // indigo (backend default)
     '#2563EB', // blue
     '#7C3AED', // violet
     '#DB2777', // pink
@@ -46,7 +47,7 @@ export const DEPARTMENT_COLOR_OPTIONS = [
     '#4B5563', // gray
 ] as const;
 
-/** Default colour applied to a brand-new department. */
+/** Default colour applied to a brand-new department (matches backend default `#6366F1`). */
 export const DEFAULT_DEPARTMENT_COLOR = DEPARTMENT_COLOR_OPTIONS[0];
 
 /* -------------------------------------------------------------------------- */

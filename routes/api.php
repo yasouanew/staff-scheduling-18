@@ -147,6 +147,10 @@ Route::prefix('v1')->group(function () {
         |----------------------------------------------------------------------
         */
         Route::get('auth/me', [AuthController::class, 'me'])->name('api.auth.me');
+        Route::put('auth/profile', [AuthController::class, 'updateProfile'])
+            ->name('api.auth.profile.update');
+        Route::put('auth/password', [AuthController::class, 'updatePassword'])
+            ->name('api.auth.password.update');
         Route::post('auth/web-welcome/complete', [AuthController::class, 'completeWebWelcome'])
             ->name('api.auth.web-welcome.complete');
         Route::post('auth/web-feature-tips/dismiss', [AuthController::class, 'dismissWebFeatureTip'])
@@ -200,6 +204,8 @@ Route::prefix('v1')->group(function () {
             ->name('api.subscription.invoices');
         Route::post('subscription/checkout', [PlanSubscriptionController::class, 'checkout'])
             ->name('api.subscription.checkout');
+        Route::post('subscription/checkout/confirm', [PlanSubscriptionController::class, 'confirmCheckout'])
+            ->name('api.subscription.checkout-confirm');
         Route::post('subscription/upgrade', [PlanSubscriptionController::class, 'upgrade'])
             ->name('api.subscription.upgrade');
         Route::post('subscription/downgrade', [PlanSubscriptionController::class, 'downgrade'])

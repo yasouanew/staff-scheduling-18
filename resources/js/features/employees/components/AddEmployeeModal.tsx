@@ -23,6 +23,8 @@ import {
     EMPLOYEE_ROLE_DESCRIPTIONS,
     EMPLOYEE_ROLE_LABELS,
     EMPLOYEE_ROLES,
+    EMPLOYMENT_TYPE_LABELS,
+    EMPLOYMENT_TYPES,
     type CreateEmployeeInput,
 } from '@/types/employee';
 
@@ -39,19 +41,28 @@ interface AddEmployeeModalProps {
 /**
  * Validation schema mirroring {@link CreateEmployeeInput}.
  *
- * Department and position reference real records by id. Branch is optional
- * because a new starter is often onboarded before their location is decided.
+ * Department, position and branch reference real records by id. The backend
+ * stores all three as nullable foreign keys, so each select is optional — a new
+ * starter is often onboarded before their assignments are decided.
  */
 const addEmployeeSchema = z.object({
     name: z.string().trim().min(2, 'Please enter the full name.'),
     email: z.string().trim().min(1, 'Email is required.').email('Enter a valid email address.'),
     // Constrained to the same three values the backend accepts.
     role: z.enum(['company_admin', 'scheduler', 'employee']),
-    departmentId: z.string().min(1, 'Select a department.'),
-
-    positionId: z.string().min(1, 'Select a position.'),
+    departmentId: z.string(),
+    positionId: z.string(),
     branchId: z.string(),
+    // Optional contact/employment details; the backend accepts them on invite.
+    phone: z.string(),
+    // Mirrors InviteEmployeeRequest's `in:full_time,part_time,casual,contractor`.
+    // `contract` is intentionally absent: the invite endpoint has no rule for it.
+    employmentType: z.enum(['full_time', 'part_time', 'casual', 'contractor']),
+    hourlyRate: z.string(),
 });
+
+/** Employment types the create (invite) endpoint accepts — a strict subset. */
+const CREATE_EMPLOYMENT_TYPES = EMPLOYMENT_TYPES.filter((type) => type !== 'contract');
 
 type AddEmployeeFormValues = z.infer<typeof addEmployeeSchema>;
 
@@ -94,9 +105,11 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps):
             email: '',
             role: DEFAULT_EMPLOYEE_ROLE,
             departmentId: '',
-
             positionId: '',
             branchId: '',
+            phone: '',
+            employmentType: 'full_time',
+            hourlyRate: '',
         },
     });
 
@@ -336,6 +349,69 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps):
                                             No positions in this department yet — create one under Positions first.
                                         </p>
                                     )}
+                                    <p className="text-sm text-muted-foreground">
+                                        Department and position are optional — you can assign them later.
+                                    </p>
+                                </div>
+
+                                {/* Phone (optional) */}
+                                <div className="space-y-1.5">
+                                    <label htmlFor="phone" className="block text-sm font-medium text-foreground">
+                                        Phone <span className="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <input
+                                        id="phone"
+                                        type="tel"
+                                        autoComplete="tel"
+                                        placeholder="e.g. 0400 123 456"
+                                        aria-invalid={Boolean(errors.phone)}
+                                        className={fieldClasses}
+                                        {...register('phone')}
+                                    />
+                                    {errors.phone && <p className="text-sm text-danger">{errors.phone.message}</p>}
+                                </div>
+
+                                {/* Employment type + hourly rate */}
+                                <div className="grid gap-4 sm:grid-cols-2">
+                                    <div className="space-y-1.5">
+                                        <label htmlFor="employmentType" className="block text-sm font-medium text-foreground">
+                                            Employment type
+                                        </label>
+                                        <select
+                                            id="employmentType"
+                                            aria-invalid={Boolean(errors.employmentType)}
+                                            className={fieldClasses}
+                                            {...register('employmentType')}
+                                        >
+                                            {CREATE_EMPLOYMENT_TYPES.map((option) => (
+                                                <option key={option} value={option}>
+                                                    {EMPLOYMENT_TYPE_LABELS[option]}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        {errors.employmentType && (
+                                            <p className="text-sm text-danger">{errors.employmentType.message}</p>
+                                        )}
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label htmlFor="hourlyRate" className="block text-sm font-medium text-foreground">
+                                            Hourly rate <span className="font-normal text-muted-foreground">(optional)</span>
+                                        </label>
+                                        <input
+                                            id="hourlyRate"
+                                            type="number"
+                                            inputMode="decimal"
+                                            min="0"
+                                            step="0.01"
+                                            placeholder="e.g. 28.50"
+                                            aria-invalid={Boolean(errors.hourlyRate)}
+                                            className={fieldClasses}
+                                            {...register('hourlyRate')}
+                                        />
+                                        {errors.hourlyRate && (
+                                            <p className="text-sm text-danger">{errors.hourlyRate.message}</p>
+                                        )}
+                                    </div>
                                 </div>
 
                                 {/* Branch (optional) */}

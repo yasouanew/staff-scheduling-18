@@ -66,6 +66,7 @@ interface EmployeeUserDto {
     name: string;
     email: string;
     role?: string | null;
+    phone?: string | null;
 }
 
 /** Raw invitation payload as serialized by `EmployeeInvitationResource`. */
@@ -87,7 +88,13 @@ interface EmployeeDto {
     full_name: string | null;
     employee_number: string | null;
     employment_type: string | null;
+    dob: string | null;
+    gender: string | null;
+    address: string | null;
+    emergency_contact: string | null;
+    emergency_phone: string | null;
     hire_date: string | null;
+    termination_date: string | null;
     hourly_rate: string | number | null;
     photo_url: string | null;
     status: string | null;
@@ -112,6 +119,8 @@ function normalizeStatus(raw: string | null | undefined): EmployeeStatus {
         case 'pending':
         case 'invited':
             return 'pending';
+        case 'terminated':
+            return 'terminated';
         default:
             return 'inactive';
     }
@@ -124,6 +133,7 @@ function normalizeEmploymentType(raw: string | null | undefined): EmploymentType
         case 'part_time':
         case 'casual':
         case 'contract':
+        case 'contractor':
             return raw;
         default:
             return 'full_time';
@@ -206,6 +216,16 @@ function mapEmployee(dto: EmployeeDto): Employee {
         // last granted even before they have accepted and the account exists.
         role: normalizeRole(dto.invitation?.role ?? dto.user?.role),
         invitation: mapInvitation(dto.invitation),
+        // Remaining profile fields exposed by `EmployeeResource`.
+        employeeNumber: dto.employee_number ?? null,
+        phone: dto.user?.phone ?? null,
+        dob: dto.dob ?? null,
+        gender: dto.gender ?? null,
+        address: dto.address ?? null,
+        emergencyContact: dto.emergency_contact ?? null,
+        emergencyPhone: dto.emergency_phone ?? null,
+        hireDate: dto.hire_date ?? null,
+        terminationDate: dto.termination_date ?? null,
     };
 }
 
@@ -264,8 +284,10 @@ async function createEmployee(input: CreateEmployeeInput): Promise<Employee> {
         department_id: input.departmentId ? Number(input.departmentId) : null,
         position_id: input.positionId ? Number(input.positionId) : null,
         branch_id: input.branchId ? Number(input.branchId) : null,
-        employment_type: 'full_time',
-
+        // Backend accepts `full_time,part_time,casual,contractor` on invite.
+        employment_type: input.employmentType,
+        hourly_rate: input.hourlyRate.trim() === '' ? null : Number(input.hourlyRate),
+        phone: input.phone.trim() === '' ? null : input.phone.trim(),
     });
 
     return mapEmployee(response.data.data);
@@ -297,6 +319,18 @@ async function updateEmployee({
             employment_type: input.employmentType,
             hourly_rate: input.hourlyRate.trim() === '' ? null : Number(input.hourlyRate),
             status: input.status,
+            // Profile fields accepted by `UpdateEmployeeRequest`. Note: `phone`
+            // is deliberately omitted — the update endpoint has no rule for it,
+            // so it would be silently discarded (phone lives on the user record
+            // and is only settable via the invite payload).
+            employee_number: input.employeeNumber.trim() === '' ? null : input.employeeNumber.trim(),
+            dob: input.dob.trim() === '' ? null : input.dob.trim(),
+            gender: input.gender.trim() === '' ? null : input.gender.trim(),
+            address: input.address.trim() === '' ? null : input.address.trim(),
+            emergency_contact: input.emergencyContact.trim() === '' ? null : input.emergencyContact.trim(),
+            emergency_phone: input.emergencyPhone.trim() === '' ? null : input.emergencyPhone.trim(),
+            hire_date: input.hireDate.trim() === '' ? null : input.hireDate.trim(),
+            termination_date: input.terminationDate.trim() === '' ? null : input.terminationDate.trim(),
         },
     );
 
@@ -342,6 +376,23 @@ async function sendInvitation({
 async function fetchEmployee(employeeId: string): Promise<Employee> {
     const response = await apiClient.get<ApiSuccessResponse<EmployeeDto>>(
         `/employees/${employeeId}`,
+    );
+
+    return mapEmployee(response.data.data);
+}
+
+/**
+ * POST /api/v1/employees/{employee}/photo — uploads (or replaces) a profile
+ * photo. Sent as multipart form data so Axios sets the `Content-Type` boundary
+ * automatically; the backend rule requires `photo: image|jpg,jpeg,png,webp|max:2048`.
+ */
+async function uploadEmployeePhoto(employeeId: string, file: File): Promise<Employee> {
+    const formData = new FormData();
+    formData.append('photo', file);
+
+    const response = await apiClient.post<ApiSuccessResponse<EmployeeDto>>(
+        `/employees/${employeeId}/photo`,
+        formData,
     );
 
     return mapEmployee(response.data.data);
@@ -431,6 +482,32 @@ export function useUpdateEmployee(): UseMutationResult<Employee, Error, UpdateEm
     });
 }
 
+/** Variables accepted by {@link useUploadEmployeePhoto}. */
+export interface UploadEmployeePhotoVariables {
+    employeeId: string;
+    file: File;
+}
+
+/**
+ * Uploads a profile photo for one employee, then refreshes the cached directory
+ * so the avatar shown in the table updates without a reload.
+ */
+export function useUploadEmployeePhoto(): UseMutationResult<
+    Employee,
+    Error,
+    UploadEmployeePhotoVariables
+> {
+    const queryClient = useQueryClient();
+
+    return useMutation<Employee, Error, UploadEmployeePhotoVariables>({
+        mutationFn: ({ employeeId, file }) => uploadEmployeePhoto(employeeId, file),
+        onSuccess: (employee) => {
+            queryClient.setQueryData(EMPLOYEES_KEYS.detail(employee.id), employee);
+            void queryClient.invalidateQueries({ queryKey: EMPLOYEES_KEYS.all });
+        },
+    });
+}
+
 /** Variables accepted by {@link useSendInvitation}. */
 export interface SendInvitationVariables {
     employeeId: string;
@@ -453,6 +530,36 @@ export function useSendInvitation(): UseMutationResult<
 
     return useMutation<SendInvitationResult, Error, SendInvitationVariables>({
         mutationFn: sendInvitation,
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: EMPLOYEES_KEYS.all });
+        },
+    });
+}
+
+/**
+ * DELETE /api/v1/employees/{employee}/invitation — makes an outstanding
+ * invitation inert.
+ *
+ * The backend clears every secret (web token, mobile code, setup token) so any
+ * previously emailed link or code stops working, while the ledger row itself is
+ * kept for the audit trail. Returns 404 when there is no invitation to revoke.
+ */
+async function revokeInvitation(employeeId: string): Promise<void> {
+    await apiClient.delete(`/employees/${employeeId}/invitation`);
+}
+
+/**
+ * Revokes one employee's outstanding invitation.
+ *
+ * The directory cache is invalidated on success because revoking clears the
+ * invitation state, which the row menu reads to decide between "Send invite",
+ * "Resend invite" and "Revoke invite".
+ */
+export function useRevokeInvitation(): UseMutationResult<void, Error, string> {
+    const queryClient = useQueryClient();
+
+    return useMutation<void, Error, string>({
+        mutationFn: revokeInvitation,
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: EMPLOYEES_KEYS.all });
         },

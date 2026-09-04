@@ -3,35 +3,8 @@
  *
  * These interfaces model the organisation-wide configuration surface: the
  * company profile, per-branch regional configuration (tuned for the Australian
- * market), department parameters, and global operational policies.
+ * market), and global operational policies.
  */
-
-/** Australian states and territories used across branch configuration. */
-export const AUSTRALIAN_STATES = [
-    'NSW',
-    'VIC',
-    'QLD',
-    'WA',
-    'SA',
-    'TAS',
-    'NT',
-    'ACT',
-] as const;
-
-/** A single Australian state/territory code. */
-export type AustralianState = (typeof AUSTRALIAN_STATES)[number];
-
-/** Human-readable labels for each state/territory. */
-export const AUSTRALIAN_STATE_LABELS: Record<AustralianState, string> = {
-    NSW: 'New South Wales',
-    VIC: 'Victoria',
-    QLD: 'Queensland',
-    WA: 'Western Australia',
-    SA: 'South Australia',
-    TAS: 'Tasmania',
-    NT: 'Northern Territory',
-    ACT: 'Australian Capital Territory',
-};
 
 /** Standard Australian regional timezones relevant to shift calculations. */
 export const AUSTRALIAN_TIMEZONES = [
@@ -70,65 +43,6 @@ export interface OrganizationProfile {
     defaultTimezone: AustralianTimezone;
     /** ISO 8601 timestamp of the last profile update. */
     updatedAt: string;
-}
-
-/**
- * Per-branch base labour rate multipliers applied on top of the base hourly
- * rate to calculate penalty rates for different shift conditions.
- */
-export interface LaborRateMultipliers {
-    /** Standard weekday multiplier (typically 1.0). */
-    weekday: number;
-    /** Saturday penalty multiplier. */
-    saturday: number;
-    /** Sunday penalty multiplier. */
-    sunday: number;
-    /** Public holiday penalty multiplier. */
-    publicHoliday: number;
-}
-
-/** Full branch configuration record. */
-export interface BranchConfiguration {
-    /** Unique branch identifier. */
-    id: string;
-    /** Display name of the branch. */
-    name: string;
-    /** State/territory the branch operates in. */
-    state: AustralianState;
-    /** Timezone used for the branch's shift calculations. */
-    timezone: AustralianTimezone;
-    /** Base hourly labour rate in AUD. */
-    baseHourlyRate: number;
-    /** Penalty-rate multipliers keyed by shift condition. */
-    rateMultipliers: LaborRateMultipliers;
-    /** ISO 8601 timestamp of the last update. */
-    updatedAt: string;
-}
-
-/** Values submitted by the {@link BranchForm}. */
-export interface BranchFormValues {
-    name: string;
-    state: AustralianState;
-    timezone: AustralianTimezone;
-    baseHourlyRate: number;
-    weekdayMultiplier: number;
-    saturdayMultiplier: number;
-    sundayMultiplier: number;
-    publicHolidayMultiplier: number;
-}
-
-/** Department-level scheduling parameters shown on the Departments tab. */
-export interface DepartmentParameters {
-    /** Unique department identifier. */
-    id: string;
-    /** Department display name. */
-    name: string;
-    /** Branch this department belongs to. */
-    branchId: string;
-    /** Minimum staff required on any given shift. */
-    minimumStaffPerShift: number;
-    /** Colour token used to theme the department in the roster calendar. */
-    colorToken: string;
 }
 
 /** Identifier keys for each toggleable operational policy. */

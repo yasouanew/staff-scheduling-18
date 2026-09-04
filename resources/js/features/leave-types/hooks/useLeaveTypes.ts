@@ -94,6 +94,7 @@ function toPayload(values: LeaveTypeMutationInput): Record<string, unknown> {
         requires_approval: values.requiresApproval,
         allow_half_day: values.allowsHalfDay,
         max_days_per_request: values.maxDaysPerRequest,
+        color: values.color,
         status: values.status,
     };
 }

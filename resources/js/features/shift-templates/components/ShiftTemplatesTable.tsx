@@ -32,6 +32,11 @@ interface ShiftTemplatesTableProps {
     onUse: (template: ShiftTemplate) => void;
     /** Permanently delete a template (parent handles the mutation + toast). */
     onDelete: (template: ShiftTemplate) => void;
+    /**
+     * When false (schedulers lack `shift_template.delete`), the destructive
+     * delete action is hidden — the backend would otherwise 403 it.
+     */
+    canDelete?: boolean;
 }
 
 /**
@@ -76,12 +81,14 @@ function TemplateActionsMenu({
     onDuplicate,
     onUse,
     onDelete,
+    canDelete,
 }: {
     template: ShiftTemplate;
     onEdit: (template: ShiftTemplate) => void;
     onDuplicate: (template: ShiftTemplate) => void;
     onUse: (template: ShiftTemplate) => void;
     onDelete: (template: ShiftTemplate) => void;
+    canDelete: boolean;
 }): JSX.Element {
     const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -124,15 +131,19 @@ function TemplateActionsMenu({
                             Duplicate template
                         </DropdownMenu.Item>
 
-                        <DropdownMenu.Separator className="my-1 h-px bg-border" />
+                        {canDelete ? (
+                            <>
+                                <DropdownMenu.Separator className="my-1 h-px bg-border" />
 
-                        <DropdownMenu.Item
-                            onSelect={() => setConfirmDelete(true)}
-                            className={cn(itemClasses, 'text-danger focus:bg-danger/10')}
-                        >
-                            <Trash2 className="h-4 w-4" aria-hidden="true" />
-                            Delete template
-                        </DropdownMenu.Item>
+                                <DropdownMenu.Item
+                                    onSelect={() => setConfirmDelete(true)}
+                                    className={cn(itemClasses, 'text-danger focus:bg-danger/10')}
+                                >
+                                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                                    Delete template
+                                </DropdownMenu.Item>
+                            </>
+                        ) : null}
                     </DropdownMenu.Content>
                 </DropdownMenu.Portal>
             </DropdownMenu.Root>
@@ -188,6 +199,7 @@ export function ShiftTemplatesTable({
     onDuplicate,
     onUse,
     onDelete,
+    canDelete = true,
 }: ShiftTemplatesTableProps): JSX.Element {
     const columns: ColumnDef<ShiftTemplate>[] = [
         {
@@ -361,6 +373,7 @@ export function ShiftTemplatesTable({
                         onDuplicate={onDuplicate}
                         onUse={onUse}
                         onDelete={onDelete}
+                        canDelete={canDelete}
                     />
                 </div>
             ),

@@ -239,6 +239,12 @@ export function useDeleteAvailabilitySlot(
 /**
  * Replaces the employee's entire week.
  *
+ * The bulk sync endpoint validates `availabilities` with `min:1`, so an empty
+ * week cannot be persisted through it — "no availability" is represented by
+ * zero rows in the database. When the incoming set is empty we therefore fall
+ * back to deleting every currently-persisted slot, which produces the same
+ * end state (an employee with no availability) without changing any API.
+ *
  * The server response is written straight back into the cache so the editor
  * immediately re-seeds its draft with real server ids (no extra round trip).
  */
@@ -248,7 +254,23 @@ export function useSyncWeeklyAvailability(
     const queryClient = useQueryClient();
 
     return useMutation<AvailabilitySlot[], Error, readonly AvailabilitySyncSlot[]>({
-        mutationFn: (slots) => syncWeek(employeeId, slots),
+        mutationFn: async (slots) => {
+            // The sync endpoint rejects an empty payload (`min:1`), so a cleared
+            // week is persisted by deleting each existing slot instead.
+            if (slots.length === 0) {
+                const current = queryClient.getQueryData<AvailabilitySlot[]>(
+                    AVAILABILITY_KEYS.byEmployee(employeeId),
+                );
+
+                if (current && current.length > 0) {
+                    await Promise.all(current.map((slot) => deleteSlot(employeeId, slot.id)));
+                }
+
+                return [];
+            }
+
+            return syncWeek(employeeId, slots);
+        },
         onSuccess: (slots) => {
             queryClient.setQueryData(AVAILABILITY_KEYS.byEmployee(employeeId), slots);
         },

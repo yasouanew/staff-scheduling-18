@@ -72,7 +72,7 @@ export function PlanCard({
                 <div className="flex items-center gap-2 text-sm">
                     <span className="font-medium text-foreground">{formatCapacity(plan.maxBranches)}</span>
                     <span className="text-muted-foreground">
-                        {plan.maxBranches === null ? 'active branches' : 'active branches'}
+                        {plan.maxBranches === null ? 'branches (unlimited)' : 'active branches'}
                     </span>
                 </div>
                 <div className="flex items-center gap-2 text-sm">
@@ -87,8 +87,8 @@ export function PlanCard({
                             type="button"
                             onClick={() => onCycleChange(option.value)}
                             className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${selectedCycle === option.value
-                                    ? 'border-primary bg-primary/10 text-primary'
-                                    : 'border-border text-muted-foreground hover:bg-muted'
+                                ? 'border-primary bg-primary/10 text-primary'
+                                : 'border-border text-muted-foreground hover:bg-muted'
                                 }`}
                         >
                             {option.label}

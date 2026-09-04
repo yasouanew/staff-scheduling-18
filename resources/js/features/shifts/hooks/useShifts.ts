@@ -155,6 +155,7 @@ function normalizeEmployeeStatus(raw: string | null | undefined): EmployeeStatus
 
     if (raw === 'active') return 'active';
     if (raw === 'pending' || raw === 'invited') return 'pending';
+    if (raw === 'terminated') return 'terminated';
     return 'inactive';
 }
 
@@ -165,6 +166,7 @@ function normalizeEmploymentType(raw: string | null | undefined): EmploymentType
         case 'part_time':
         case 'casual':
         case 'contract':
+        case 'contractor':
             return raw;
         default:
             // Casual is the safest assumption for scheduling: it implies no
@@ -204,10 +206,19 @@ function mapEmployee(dto: ShiftEmployeeDto | null | undefined): Employee | null 
         employmentType: normalizeEmploymentType(dto.employment_type),
         hourlyRate: dto.hourly_rate != null ? String(dto.hourly_rate) : null,
         // Shift payloads carry only the scheduling slice of an employee, so the
-        // access level and onboarding state are not included here. The team page
-        // is the single source of truth for both.
+        // access level, onboarding state and extended profile fields are not
+        // included here. The team page is the single source of truth for them.
         role: null,
         invitation: null,
+        employeeNumber: null,
+        phone: null,
+        dob: null,
+        gender: null,
+        address: null,
+        emergencyContact: null,
+        emergencyPhone: null,
+        hireDate: null,
+        terminationDate: null,
     };
 }
 

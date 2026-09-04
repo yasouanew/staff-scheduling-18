@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import { StatCard } from '@/Components/common/StatCard';
+import { useDepartmentOptions } from '@/features/departments/hooks/useDepartments';
 import { getApiErrorMessage } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import {
@@ -36,20 +37,25 @@ const currencyFormatter = new Intl.NumberFormat('en-AU', {
 /**
  * Positions list page (`/positions`).
  *
- * Owns the server-side status filter that drives the {@link usePositions}
- * query, and delegates search / sorting / pagination / column visibility to the
- * reusable {@link PositionsTable}. Creating and editing flow through the
- * {@link PositionFormModal}; deletion runs through the dedicated mutation with a
- * confirmation dialog (in the table) and toast feedback. Relies on the
- * app-level QueryClient.
+ * Owns the server-side status + department filters that drive the
+ * {@link usePositions} query (the backend's `PositionService::paginate` supports
+ * `search`, `status`, `company_id` and `department_id`), and delegates search /
+ * sorting / pagination / column visibility to the reusable {@link PositionsTable}.
+ * Creating and editing flow through the {@link PositionFormModal}; deletion runs
+ * through the dedicated mutation with a confirmation dialog (in the table) and
+ * toast feedback. Relies on the app-level QueryClient.
  */
 export function PositionsListPage(): JSX.Element {
     const [status, setStatus] = useState<PositionStatus | typeof ALL_VALUE>(ALL_VALUE);
+    const [departmentId, setDepartmentId] = useState<string>(ALL_VALUE);
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [editing, setEditing] = useState<Position | null>(null);
 
+    const { data: departmentOptions = [], isLoading: isLoadingDepartments } = useDepartmentOptions();
+
     const { data, isLoading, isError, refetch, isFetching } = usePositions({
         status: status === ALL_VALUE ? undefined : status,
+        departmentId: departmentId === ALL_VALUE ? undefined : Number(departmentId),
         perPage: 100,
     });
 
@@ -163,8 +169,24 @@ export function PositionsListPage(): JSX.Element {
                 </div>
             ) : (
                 <>
-                    {/* Filter toolbar (server-side status) */}
+                    {/* Filter toolbar (server-side status + department) */}
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+                        <select
+                            value={departmentId}
+                            onChange={(event) => setDepartmentId(event.target.value)}
+                            disabled={isLoadingDepartments}
+                            aria-label="Filter by department"
+                            className={cn(selectClasses, 'disabled:opacity-60')}
+                        >
+                            <option value={ALL_VALUE}>
+                                {isLoadingDepartments ? 'Loading departments...' : 'All departments'}
+                            </option>
+                            {departmentOptions.map((option) => (
+                                <option key={option.id} value={option.id}>
+                                    {option.name}
+                                </option>
+                            ))}
+                        </select>
                         <select
                             value={status}
                             onChange={(event) =>

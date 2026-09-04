@@ -27,6 +27,7 @@ import { type Employee } from '@/types/employee';
 import { AddEmployeeModal } from '../components/AddEmployeeModal';
 import { EditEmployeeModal } from '../components/EditEmployeeModal';
 import { EmployeeRowActions } from '../components/EmployeeRowActions';
+import { RevokeInviteDialog } from '../components/RevokeInviteDialog';
 import { SendInviteModal } from '../components/SendInviteModal';
 import { deriveEmployeeStats, useEmployees } from '../hooks/useEmployees';
 
@@ -76,6 +77,7 @@ const selectClasses = cn(
 interface EmployeeRowHandlers {
     onEdit: (employee: Employee) => void;
     onSendInvite: (employee: Employee) => void;
+    onRevokeInvite: (employee: Employee) => void;
 }
 
 /**
@@ -89,6 +91,7 @@ interface EmployeeRowHandlers {
 function buildColumns({
     onEdit,
     onSendInvite,
+    onRevokeInvite,
     isEditable,
 }: EmployeeRowHandlers & { isEditable: boolean }): ColumnDef<Employee>[] {
     return [
@@ -138,12 +141,19 @@ function buildColumns({
             header: 'Branch',
             cell: ({ row }) =>
                 row.original.branchName ? (
-                    <Link
-                        to={`/branches/${row.original.branchId}`}
-                        className="rounded text-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                        {row.original.branchName}
-                    </Link>
+                    // The branch detail route is company-admin only; schedulers
+                    // cannot reach /branches/:id so the name is plain text for
+                    // them instead of a dead link.
+                    isEditable ? (
+                        <Link
+                            to={`/branches/${row.original.branchId}`}
+                            className="rounded text-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                            {row.original.branchName}
+                        </Link>
+                    ) : (
+                        <span className="text-foreground">{row.original.branchName}</span>
+                    )
                 ) : (
                     <span className="text-muted-foreground">Unassigned</span>
                 ),
@@ -173,13 +183,16 @@ function buildColumns({
             enableSorting: false,
             enableHiding: false,
             cell: ({ row }) => (
+                // Schedulers are view-only for employee availability (the sync
+                // endpoint requires employee.edit), so the action reads "View"
+                // and is still a valid deep link into the read-only editor.
                 <Link
                     to={`/employees/${row.original.id}/availability`}
-                    aria-label={`Manage weekly availability for ${row.original.name}`}
+                    aria-label={`${isEditable ? 'Manage' : 'View'} weekly availability for ${row.original.name}`}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                     <CalendarClock aria-hidden="true" className="size-3.5" />
-                    Manage
+                    {isEditable ? 'Manage' : 'View'}
                 </Link>
             ),
             // Secondary to the row menu, which carries the same action on small screens.
@@ -202,6 +215,7 @@ function buildColumns({
                             employee={row.original}
                             onEdit={onEdit}
                             onSendInvite={onSendInvite}
+                            onRevokeInvite={onRevokeInvite}
                         />
                     ),
                     meta: { headerClassName: 'w-12 text-right', cellClassName: 'text-right' },
@@ -226,6 +240,7 @@ function EmployeeDirectory(): JSX.Element {
      */
     const [employeeToEdit, setEmployeeToEdit] = useState<Employee | null>(null);
     const [employeeToInvite, setEmployeeToInvite] = useState<Employee | null>(null);
+    const [employeeToRevoke, setEmployeeToRevoke] = useState<Employee | null>(null);
 
     // Schedulers can view the directory but only company admins can add, edit or
     // invite team members (the backend enforces `employee.create`/`employee.edit`).
@@ -269,15 +284,17 @@ function EmployeeDirectory(): JSX.Element {
     // Stable identities keep the memoised column definitions from being rebuilt.
     const handleEdit = useCallback((employee: Employee) => setEmployeeToEdit(employee), []);
     const handleSendInvite = useCallback((employee: Employee) => setEmployeeToInvite(employee), []);
+    const handleRevokeInvite = useCallback((employee: Employee) => setEmployeeToRevoke(employee), []);
 
     const columns = useMemo(
         () =>
             buildColumns({
                 onEdit: handleEdit,
                 onSendInvite: handleSendInvite,
+                onRevokeInvite: handleRevokeInvite,
                 isEditable: isCompanyAdmin,
             }),
-        [handleEdit, handleSendInvite, isCompanyAdmin],
+        [handleEdit, handleSendInvite, handleRevokeInvite, isCompanyAdmin],
     );
 
     return (
@@ -457,6 +474,12 @@ function EmployeeDirectory(): JSX.Element {
                 employee={employeeToInvite}
                 onOpenChange={(open) => {
                     if (!open) setEmployeeToInvite(null);
+                }}
+            />
+            <RevokeInviteDialog
+                employee={employeeToRevoke}
+                onOpenChange={(open) => {
+                    if (!open) setEmployeeToRevoke(null);
                 }}
             />
         </div>

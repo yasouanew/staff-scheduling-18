@@ -11,12 +11,14 @@ use App\Http\Resources\SubscriptionSummaryResource;
 use App\Models\Company;
 use App\Models\Plan;
 use App\Models\Subscription;
+use App\Services\BillingLifecycleService;
 use App\Services\EntitlementService;
 use App\Services\SubscriptionService;
 use App\Services\UsageService;
 use App\Traits\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Laravel\Cashier\Cashier;
 
 /**
  * The authenticated business's own subscription management surface.
@@ -33,6 +35,8 @@ use Illuminate\Http\Request;
  *   GET    subscription/usage      → branch + per-branch employee usage
  *   GET    subscription/features   → feature access for the current plan
  *   POST   subscription/checkout   → open a hosted Stripe Checkout session
+ *   POST   subscription/checkout/confirm → activate the local subscription after
+ *                                          a paid Stripe Checkout redirect
  *   POST   subscription/upgrade    → switch to a larger / equal plan
  *   POST   subscription/downgrade  → switch to a smaller plan (usage-validated)
  *   POST   subscription/cancel     → cancel the subscription
@@ -62,6 +66,7 @@ class PlanSubscriptionController extends Controller
         private SubscriptionService $subscriptionService,
         private EntitlementService $entitlements,
         private UsageService $usage,
+        private BillingLifecycleService $lifecycle,
     ) {}
 
     /**
@@ -392,6 +397,101 @@ class PlanSubscriptionController extends Controller
         return $this->successResponse(
             new SubscriptionSummaryResource($subscription),
             'Subscription resumed successfully.'
+        );
+    }
+
+    /**
+     * Confirm a successful Stripe Checkout session and activate the local
+     * subscription without waiting for the Stripe webhook.
+     *
+     * Stripe redirects the user back to the SPA with
+     * `?checkout=success&session_id=cs_...` after a completed payment.  This
+     * endpoint retrieves the Checkout session, verifies payment was actually
+     * made, and drives the same local state transition that the webhook's
+     * `checkout.session.completed` + `invoice.paid` pair would have triggered.
+     *
+     * This is the primary fix for environments where `STRIPE_WEBHOOK_SECRET` is
+     * not configured (the webhook handler returns 503) — the subscription row
+     * that was created in `incomplete` state by `checkout()` is activated
+     * immediately, a `SubscriptionPayment` row is recorded (fixing the invoice
+     * page), and the company is unlocked.
+     */
+    public function confirmCheckout(Request $request): JsonResponse
+    {
+        $company = $this->resolveCompany($request);
+
+        $validated = $request->validate([
+            'session_id' => ['required', 'string'],
+        ]);
+
+        // Locate the local subscription that this checkout created.  It must
+        // belong to the caller's company and still be in `incomplete` status.
+        $subscription = $company->subscriptions()
+            ->where('checkout_session_id', $validated['session_id'])
+            ->where('status', 'incomplete')
+            ->first();
+
+        abort_unless($subscription, 404, 'No matching incomplete subscription found for this checkout session.');
+
+        $this->authorize('update', [$subscription, $company]);
+
+        // Retrieve the Stripe Checkout session with the subscription and its
+        // latest invoice expanded so we can extract the invoice array.
+        try {
+            $session = Cashier::stripe()->checkout->sessions->retrieve(
+                $validated['session_id'],
+                ['expand' => ['subscription', 'subscription.latest_invoice.payment_intent', 'line_items']],
+            );
+        } catch (\Exception $e) {
+            return $this->errorResponse('Failed to retrieve checkout session from Stripe.', 502);
+        }
+
+        if (($session->payment_status ?? 'unpaid') !== 'paid') {
+            return $this->errorResponse('Checkout session has not been paid yet.', 422);
+        }
+
+        // Update the local subscription with the Stripe subscription id.
+        $stripeSubId = $session->subscription->id ?? null;
+
+        if (is_string($stripeSubId)) {
+            $subscription->stripe_id = $stripeSubId;
+        }
+
+        $subscription->checkout_session_id = $session->id;
+        $subscription->save();
+
+        // Build the invoice array in the shape that BillingLifecycleService
+        // expects, mirroring StripeBillingWebhookController::invoiceArray().
+        $invoice = $session->subscription->latest_invoice ?? null;
+        $invoiceArray = $invoice ? [
+            'id' => $invoice->id ?? null,
+            'amount_due' => $invoice->amount_due ?? null,
+            'amount_paid' => $invoice->amount_paid ?? null,
+            'currency' => $invoice->currency ?? 'AUD',
+            'payment_intent' => $invoice->payment_intent->id ?? null,
+        ] : [];
+
+        // Also capture the period start/end from the Stripe subscription.
+        $periodStart = isset($session->subscription->current_period_start)
+            ? (int) $session->subscription->current_period_start
+            : null;
+        $periodEnd = isset($session->subscription->current_period_end)
+            ? (int) $session->subscription->current_period_end
+            : null;
+
+        // Drive the same lifecycle transition that handleInvoicePaid does.
+        $this->lifecycle->markPaid($subscription, $invoiceArray, $periodStart, $periodEnd);
+
+        // Mirror the webhook's activateSubscription logic so company admins
+        // are notified and the company is unlocked (markPaid already unlocks
+        // the company, but the notification flag is separate).
+        if ($subscription->activation_notified_at === null) {
+            $subscription->update(['activation_notified_at' => now()]);
+        }
+
+        return $this->successResponse(
+            new SubscriptionSummaryResource($subscription->fresh()->load('plan')),
+            'Subscription activated successfully.',
         );
     }
 

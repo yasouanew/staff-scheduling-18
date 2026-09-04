@@ -355,6 +355,18 @@ async function startCheckout(planId: string, billingCycle: BillingCycle): Promis
     return response.data.data.checkout_url;
 }
 
+/**
+ * POST /subscription/checkout/confirm — activate the local subscription after a
+ * paid Stripe Checkout redirect (session id from the success URL).
+ */
+async function confirmCheckout(sessionId: string): Promise<SubscriptionSummary> {
+    const response = await apiClient.post<ApiSuccessResponse<SubscriptionSummaryDto>>(
+        '/subscription/checkout/confirm',
+        { session_id: sessionId },
+    );
+    return mapSummary(response.data.data);
+}
+
 /** POST /subscription/cancel — cancels at the end of the current period (or immediately). */
 async function cancelSubscription(immediately = false): Promise<SubscriptionSummary> {
     const response = await apiClient.post<ApiSuccessResponse<SubscriptionSummaryDto>>('/subscription/cancel', {
@@ -477,6 +489,22 @@ export function useBillingPortal(): UseMutationResult<string, Error, void> {
 export function useSelfServiceCheckout(): UseMutationResult<string, Error, { planId: string; billingCycle: BillingCycle }> {
     return useMutation<string, Error, { planId: string; billingCycle: BillingCycle }>({
         mutationFn: ({ planId, billingCycle }) => startCheckout(planId, billingCycle),
+    });
+}
+
+/**
+ * Confirms a paid Stripe Checkout session and activates the local subscription,
+ * then refreshes all billing + session caches.
+ */
+export function useConfirmCheckout(): UseMutationResult<SubscriptionSummary, Error, string> {
+    const queryClient = useQueryClient();
+
+    return useMutation<SubscriptionSummary, Error, string>({
+        mutationFn: (sessionId) => confirmCheckout(sessionId),
+        onSuccess: (summary) => {
+            void queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.all });
+            queryClient.setQueryData(SUBSCRIPTION_KEYS.summary, summary);
+        },
     });
 }
 

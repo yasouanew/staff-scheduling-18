@@ -79,11 +79,24 @@ class Company extends Model
     }
 
     /**
-     * Determine whether the company still has an active registration trial.
+     * The application's authoritative access resolver.
+     *
+     * Every access decision delegates to {@see \App\Services\AccessStateService}
+     * so there is a single source of truth (and a single clock — the server's)
+     * for trial / subscription / grace entitlements across the whole app.
+     */
+    protected function accessState(): \App\Services\AccessStateService
+    {
+        return app(\App\Services\AccessStateService::class);
+    }
+
+    /**
+     * Determine whether the company still has an active registration trial,
+     * evaluated against the server clock (never a client-supplied timestamp).
      */
     public function isTrialActive(): bool
     {
-        return $this->trial_ends_at?->isFuture() ?? false;
+        return $this->accessState()->isTrialActive($this);
     }
 
     /**
@@ -91,25 +104,12 @@ class Company extends Model
      *
      * Access is granted by an active subscription and, during a payment-failure
      * grace period, by a grace_period subscription still within its
-     * `grace_ends_at` window.
+     * `grace_ends_at` window. Delegated to the authoritative access service so
+     * every caller shares the same entitlement rule.
      */
     public function activeSubscription(): ?Subscription
     {
-        return $this->subscriptions()
-            ->where(function (Builder $query): void {
-                $query->where('status', 'active')
-                    ->where(function (Builder $period): void {
-                        $period->whereNull('ends_at')->orWhere('ends_at', '>', now());
-                    });
-            })
-            ->orWhere(function (Builder $query): void {
-                $query->where('status', 'grace_period')
-                    ->where(function (Builder $grace): void {
-                        $grace->whereNull('grace_ends_at')->orWhere('grace_ends_at', '>', now());
-                    });
-            })
-            ->latest('starts_at')
-            ->first();
+        return $this->accessState()->entitledSubscription($this);
     }
 
     /**
@@ -117,7 +117,7 @@ class Company extends Model
      */
     public function isAccessLocked(): bool
     {
-        return ! $this->isTrialActive() && ! $this->activeSubscription();
+        return $this->accessState()->isLocked($this);
     }
 
     /**

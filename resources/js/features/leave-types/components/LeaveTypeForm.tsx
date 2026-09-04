@@ -1,12 +1,17 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { BadgeCheck, RotateCcw, X } from 'lucide-react';
+import { BadgeCheck, Check, RotateCcw, X } from 'lucide-react';
 import { useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 
 import { LoadingSpinner } from '@/Components/common/LoadingSpinner';
 import { cn } from '@/lib/utils';
-import type { LeaveType, LeaveTypeMutationInput } from '@/types/leave-type';
+import {
+    DEFAULT_LEAVE_TYPE_COLOR,
+    LEAVE_TYPE_COLOR_OPTIONS,
+    type LeaveType,
+    type LeaveTypeMutationInput,
+} from '@/types/leave-type';
 
 import { leaveTypeFormSchema, type LeaveTypeFormValues } from '../schemas';
 
@@ -37,6 +42,7 @@ function createDefaultValues(): LeaveTypeFormValues {
         requiresApproval: true,
         allowsHalfDay: true,
         maxDaysPerRequest: null,
+        color: DEFAULT_LEAVE_TYPE_COLOR,
         status: 'active',
     };
 }
@@ -53,6 +59,7 @@ function toFormValues(leaveType: LeaveType): LeaveTypeFormValues {
         requiresApproval: leaveType.requiresApproval,
         allowsHalfDay: leaveType.allowsHalfDay,
         maxDaysPerRequest: leaveType.maxDaysPerRequest,
+        color: leaveType.color ?? DEFAULT_LEAVE_TYPE_COLOR,
         status: leaveType.status,
     };
 }
@@ -108,6 +115,7 @@ export function LeaveTypeForm({
         reset,
         setValue,
         watch,
+        control,
         formState: { errors },
     } = useForm<LeaveTypeFormValues>({
         resolver: zodResolver(leaveTypeFormSchema),
@@ -223,6 +231,45 @@ export function LeaveTypeForm({
                                         })}
                                     />
                                     {errors.description ? <p className="text-sm text-danger">{errors.description.message}</p> : null}
+                                </div>
+                                <div className="space-y-1.5">
+                                    <span className="block text-sm font-medium text-foreground">Colour</span>
+                                    <p className="text-xs text-muted-foreground">
+                                        Used to distinguish this leave type on calendars and summaries.
+                                    </p>
+                                    <Controller
+                                        control={control}
+                                        name="color"
+                                        render={({ field }) => (
+                                            <div className="flex flex-wrap gap-2 pt-1">
+                                                {LEAVE_TYPE_COLOR_OPTIONS.map((swatch) => {
+                                                    const selected = field.value === swatch;
+                                                    return (
+                                                        <button
+                                                            key={swatch}
+                                                            type="button"
+                                                            onClick={() => field.onChange(swatch)}
+                                                            aria-label={`Select colour ${swatch}`}
+                                                            aria-pressed={selected}
+                                                            className={cn(
+                                                                'flex h-8 w-8 items-center justify-center rounded-full ring-offset-2 ring-offset-background transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                                                selected && 'ring-2 ring-ring',
+                                                            )}
+                                                            style={{ backgroundColor: swatch }}
+                                                        >
+                                                            {selected && (
+                                                                <Check
+                                                                    className="h-4 w-4 text-white"
+                                                                    aria-hidden="true"
+                                                                />
+                                                            )}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                    />
+                                    {errors.color && <p className="text-sm text-danger">{errors.color.message}</p>}
                                 </div>
                             </section>
 
