@@ -6,6 +6,7 @@ use App\Notifications\ResetPasswordNotification;
 use App\Notifications\VerifyEmailNotification;
 use Database\Factories\UserFactory;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
@@ -65,6 +66,27 @@ class User extends Authenticatable implements MustVerifyEmail
             'web_welcome_completed_at' => 'datetime',
             'web_feature_tips' => 'array',
         ];
+    }
+
+    /**
+     * Constrain a query to the active user "seats" of a company.
+     *
+     * Under the per-seat model a seat is one active user account — any user
+     * belonging to the company whose role is not the platform-wide
+     * `super_admin` and whose status is `active`, with or without an employee
+     * profile. This is the billing authority, so the count is always derived
+     * here rather than from the (mirroring) employees table.
+     *
+     * The optional $exclude lets callers ignore one account (e.g. the user
+     * being edited/removed) when deciding whether a new activation fits.
+     */
+    public function scopeActiveSeats(Builder $query, ?int $companyId = null, ?User $exclude = null): Builder
+    {
+        return $query
+            ->when($companyId !== null, fn (Builder $q) => $q->where('company_id', $companyId))
+            ->where('role', '!=', 'super_admin')
+            ->where('status', 'active')
+            ->when($exclude !== null, fn (Builder $q) => $q->whereKeyNot($exclude->getKey()));
     }
 
     /**

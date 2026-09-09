@@ -100,13 +100,12 @@ export function PlanForm({ plan, isSaving, onSubmit, onCancel }: { plan?: Billin
                 <label className="text-sm font-medium text-foreground">Yearly AUD
                     <input required type="number" min="0" step="0.01" value={value.priceYearly} onChange={e => change('priceYearly', Number(e.target.value))} className={field} />
                 </label>
-                <label className="text-sm font-medium text-foreground">Max employees
-                    <span className="block text-xs text-muted-foreground">Leave empty for unlimited</span>
+                <label className="text-sm font-medium text-foreground">
+                    <span className="mb-1 flex items-center gap-1.5">
+                        Max active users (seats)
+                        <FieldInfo text="The number of active user accounts (seats) this plan allows. Every active company admin, scheduler and employee counts as one seat. Leave empty for unlimited." />
+                    </span>
                     <input type="number" min="1" step="1" value={value.maxEmployees ?? ''} onChange={e => change('maxEmployees', e.target.value === '' ? null : Number(e.target.value))} className={field} />
-                </label>
-                <label className="text-sm font-medium text-foreground">Max branches
-                    <span className="block text-xs text-muted-foreground">Leave empty for unlimited</span>
-                    <input type="number" min="1" step="1" value={value.maxBranches ?? ''} onChange={e => change('maxBranches', e.target.value === '' ? null : Number(e.target.value))} className={field} />
                 </label>
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

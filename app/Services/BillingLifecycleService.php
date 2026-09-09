@@ -83,10 +83,10 @@ class BillingLifecycleService
      * Reconcile a successful payment: record it, reactivate access and clear
      * all past-due / grace / suspension state.
      */
-    public function markPaid(Subscription $subscription, array $invoice, ?int $periodStart = null, ?int $periodEnd = null): void
+    public function markPaid(Subscription $subscription, array $invoice, ?int $periodStart = null, ?int $periodEnd = null, string $type = 'subscription'): void
     {
-        DB::transaction(function () use ($subscription, $invoice, $periodStart, $periodEnd): void {
-            $this->upsertPayment($subscription, $invoice, 'succeeded');
+        DB::transaction(function () use ($subscription, $invoice, $periodStart, $periodEnd, $type): void {
+            $this->upsertPayment($subscription, $invoice, 'succeeded', $type);
 
             $subscription->forceFill([
                 'status' => 'active',
@@ -146,8 +146,11 @@ class BillingLifecycleService
      * Upsert a SubscriptionPayment row from an invoice event. Idempotent per
      * provider invoice reference so duplicate webhook deliveries never create
      * duplicate payment records.
+     *
+     * `$type` labels the row (`subscription` for renewals, `proration` for
+     * plan-change charges) so the Invoices tab can distinguish them.
      */
-    protected function upsertPayment(Subscription $subscription, array $invoice, string $status): void
+    protected function upsertPayment(Subscription $subscription, array $invoice, string $status, string $type = 'subscription'): void
     {
         $reference = $invoice['id'] ?? null;
 
@@ -163,6 +166,7 @@ class BillingLifecycleService
         if ($existing) {
             $existing->update([
                 'status' => $status,
+                'type' => $existing->type ?? $type,
                 'paid_at' => $status === 'succeeded' ? now() : null,
             ]);
 
@@ -176,6 +180,7 @@ class BillingLifecycleService
             'provider_reference' => $reference,
             'stripe_payment_intent_id' => $invoice['payment_intent'] ?? null,
             'status' => $status,
+            'type' => $type,
             'paid_at' => $status === 'succeeded' ? now() : null,
         ]);
     }

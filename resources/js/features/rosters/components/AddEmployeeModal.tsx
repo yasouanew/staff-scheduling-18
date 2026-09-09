@@ -15,8 +15,9 @@ interface AddEmployeeModalProps {
 
 /**
  * Dialog for selecting an employee to place on the current roster. Shows the
- * active employees from the directory; confirming calls `onAdd` so the parent
- * can add the employee as a new row with empty shift cells.
+ * employees from the directory; confirming calls `onAdd` so the parent can add
+ * the employee as a new row with empty shift cells. Pending, inactive and
+ * terminated employees stay visible but cannot be selected.
  */
 export function AddEmployeeModal({
     open,
@@ -28,14 +29,11 @@ export function AddEmployeeModal({
 
     // Reset the selection each time the dialog opens so a stale id never leaks
     // into a later confirm.
-    const activeEmployees = useMemo(
-        () => (employeesQuery.data ?? []).filter((employee) => employee.status === 'active'),
-        [employeesQuery.data],
-    );
+    const employees = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
 
     const selectedEmployee = useMemo(
-        () => activeEmployees.find((employee) => employee.id === selectedId) ?? null,
-        [activeEmployees, selectedId],
+        () => employees.find((employee) => employee.id === selectedId) ?? null,
+        [employees, selectedId],
     );
 
     return (
@@ -72,10 +70,10 @@ export function AddEmployeeModal({
                                     />
                                 ))}
                             </div>
-                        ) : activeEmployees.length === 0 ? (
+                        ) : employees.length === 0 ? (
                             <div className="py-8 text-center">
                                 <p className="text-sm text-muted-foreground">
-                                    No active employees found.
+                                    No employees found.
                                 </p>
                                 <p className="mt-1 text-xs text-muted-foreground/70">
                                     Add someone to your directory first, then return to
@@ -84,8 +82,9 @@ export function AddEmployeeModal({
                             </div>
                         ) : (
                             <ul className="space-y-1.5">
-                                {activeEmployees.map((employee) => {
+                                {employees.map((employee) => {
                                     const isSelected = employee.id === selectedId;
+                                    const isSelectable = employee.status === 'active';
 
                                     return (
                                         <li key={employee.id}>
@@ -93,10 +92,11 @@ export function AddEmployeeModal({
                                                 type="button"
                                                 onClick={() => setSelectedId(employee.id)}
                                                 aria-pressed={isSelected}
+                                                disabled={!isSelectable}
                                                 className={`flex w-full items-center gap-3 rounded-lg border p-2.5 text-left transition-colors ${isSelected
-                                                        ? 'border-primary bg-primary/5'
-                                                        : 'border-border hover:bg-secondary/60'
-                                                    }`}
+                                                    ? 'border-primary bg-primary/5'
+                                                    : 'border-border hover:bg-secondary/60'
+                                                    } ${!isSelectable ? 'opacity-60' : ''}`}
                                             >
                                                 <div className="min-w-0 flex-1">
                                                     <p className="truncate text-sm font-medium text-foreground">
@@ -107,7 +107,11 @@ export function AddEmployeeModal({
                                                     </p>
                                                 </div>
 
-                                                {isSelected ? (
+                                                {!isSelectable ? (
+                                                    <span className="shrink-0 rounded-md bg-secondary px-1.5 py-0.5 text-[11px] font-medium capitalize text-muted-foreground">
+                                                        {employee.status}
+                                                    </span>
+                                                ) : isSelected ? (
                                                     <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
                                                         <Users className="h-3 w-3" aria-hidden="true" />
                                                     </span>

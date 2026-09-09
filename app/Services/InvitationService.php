@@ -32,6 +32,10 @@ class InvitationService
     /** Roles an administrator may invite someone as. */
     public const ASSIGNABLE_ROLES = ['company_admin', 'scheduler', 'employee'];
 
+    public function __construct(
+        private SeatCapacityService $seats,
+    ) {}
+
     /**
      * Create (or refresh) an invitation for an employee and email it.
      *
@@ -56,6 +60,14 @@ class InvitationService
             ]);
         }
 
+        // The plan's seat allowance gates every invitation send — including
+        // re-sends of an existing pending member. While the plan is full the
+        // invitee could not accept (activate) until a seat frees up, so the
+        // guard refuses the email, force-expires every outstanding invitation
+        // of the company (their links/codes stop working) and notifies the
+        // company admins. See SeatCapacityService::assertCanSendInvitation().
+        $this->seats->assertCanSendInvitation($employee->company);
+
         // Guard the address against every *other* account before we touch anything.
         if ($email !== null) {
             $this->assertEmailAvailable($email, $user?->id);
@@ -71,6 +83,16 @@ class InvitationService
             // Keep the employee row pointed at the account it onboards.
             if ((int) $employee->user_id !== (int) $user->id) {
                 $employee->forceFill(['user_id' => $user->id])->save();
+            }
+
+            // A directory row that was `active` only because no login existed
+            // yet must be demoted to `pending` the moment an invitation goes
+            // out. Until the invitee accepts (sets a password) their account is
+            // still `invited` — no real active login — so the row must not show
+            // as Active or consume a seat. Acceptance flips the account to
+            // `active` and `activateHeldEmployee()` promotes the row back.
+            if ($user->status === 'invited' && $employee->status === 'active') {
+                $employee->forceFill(['status' => 'pending'])->save();
             }
 
             $invitation = EmployeeInvitation::firstOrNew(['user_id' => $user->id]);
@@ -320,9 +342,20 @@ class InvitationService
      * Reaching this point proves control of the mailbox, so the address is
      * marked verified and the account flipped to `active` — without which
      * `LoginAction` would keep rejecting the brand-new sign-in as inactive.
+     *
+     * Flipping the account to `active` consumes a seat, so the per-seat
+     * capacity guard runs first. The user is excluded so re-accepting (or any
+     * in-place re-activation) cannot self-block. This is the single choke point
+     * for both the web and mobile acceptance journeys.
      */
     protected function activate(User $user, string $password): User
     {
+        $company = $user->company;
+
+        if ($company !== null) {
+            $this->seats->assertCanActivateUser($company, $user);
+        }
+
         $user->forceFill([
             'password' => Hash::make($password),
             'status' => 'active',
@@ -333,7 +366,37 @@ class InvitationService
         // Invalidate any sessions issued before the password existed.
         $user->tokens()->delete();
 
+        $this->activateHeldEmployee($user);
+
         return $user;
+    }
+
+    /**
+     * Promote a directory row that was created `pending` because the plan was
+     * full at invite time (see EmployeeService::invite()).
+     *
+     * Accepting an invitation proves the account has a real password, so the
+     * seat guard above is what decides whether activation succeeds. When it
+     * passes (a seat was freed or the plan upgraded), the linked employee must
+     * move to `active` too — otherwise an active, sign-in-ready account would
+     * stay unschedulable and forever show as Pending in the directory.
+     *
+     * Rows created through other journeys (already `active`, or invitations
+     * sent to account-less employees) are left untouched.
+     */
+    protected function activateHeldEmployee(User $user): void
+    {
+        if ($user->status !== 'active') {
+            return;
+        }
+
+        $employee = $user->employee;
+
+        if ($employee === null || $employee->status !== 'pending') {
+            return;
+        }
+
+        $employee->update(['status' => 'active']);
     }
 
     /**

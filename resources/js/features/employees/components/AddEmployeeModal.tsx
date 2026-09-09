@@ -1,21 +1,20 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
 import { LoadingSpinner } from '@/Components/common/LoadingSpinner';
-import { BranchCapacityDialog } from '@/features/billing/components/BranchCapacityDialog';
-import { CapacityWarning, IncreaseCapacityButton } from '@/features/billing/components/CapacityWarning';
-import { useUpdateBranchCapacity } from '@/features/billing/hooks/useBranchBilling';
-import { useUsageOverview } from '@/features/billing/hooks/useSubscription';
-import type { BranchUsageItem } from '@/features/billing/types';
+import { CapacityWarning } from '@/features/billing/components/CapacityWarning';
+import { UpgradePromptDialog } from '@/features/billing/components/UpgradePromptDialog';
+import { useSeatCapacity } from '@/features/billing/context/SeatCapacityContext';
 import { useBranchOptions } from '@/features/branches/hooks/useBranches';
 import { useDepartmentOptions } from '@/features/departments/hooks/useDepartments';
 import { usePositionOptions } from '@/features/positions/hooks/usePositions';
 import { getApiErrorMessage } from '@/lib/api-client';
+import { handleCapacityError } from '@/lib/capacity-errors';
 import { cn } from '@/lib/utils';
 
 import {
@@ -86,10 +85,13 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps):
     const createEmployee = useCreateEmployee();
     const { data: branchOptions = [], isLoading: isLoadingBranches } = useBranchOptions();
     const { data: departmentOptions = [], isLoading: isLoadingDepartments } = useDepartmentOptions();
-    const usageQuery = useUsageOverview();
-    const updateCapacity = useUpdateBranchCapacity();
-    const [capacityBranch, setCapacityBranch] = useState<BranchUsageItem | null>(null);
-    const [capacityOpen, setCapacityOpen] = useState(false);
+    const [upgradeOpen, setUpgradeOpen] = useState(false);
+
+    // Live active-user seat capacity. Inviting does not consume a seat at submit
+    // (the new account stays `invited`), so this is informational: it warns when
+    // the plan is already at capacity because accepting the invitation will need
+    // a free seat.
+    const seatCapacity = useSeatCapacity();
 
     const {
         register,
@@ -119,23 +121,6 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps):
     // Positions belong to a department, so only offer titles from the chosen one.
     const selectedDepartmentId = watch('departmentId');
 
-    // Tracks the chosen branch so capacity guidance can be shown for it.
-    const selectedBranchId = watch('branchId');
-
-    const selectedBranchUsage = useMemo(() => {
-        if (!selectedBranchId) return undefined;
-        return usageQuery.data?.branchesUsage.find(
-            (item) => String(item.id) === String(selectedBranchId),
-        );
-    }, [selectedBranchId, usageQuery.data]);
-
-    /** True when the selected branch has filled every employee position. */
-    const isBranchAtCapacity =
-        selectedBranchUsage !== undefined &&
-        selectedBranchUsage.employeeCapacity !== null &&
-        selectedBranchUsage.remaining !== null &&
-        selectedBranchUsage.remaining <= 0;
-
     const { data: positionOptions = [], isLoading: isLoadingPositions } = usePositionOptions(
         selectedDepartmentId ? Number(selectedDepartmentId) : undefined,
     );
@@ -153,13 +138,36 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps):
     const submit = handleSubmit(async (values) => {
         const payload: CreateEmployeeInput = values;
 
+        // The backend refuses to email an invitation while the plan is at its
+        // seat limit (the invitee could not accept until a seat frees up), so
+        // pre-empt the 422 and guide the admin to upgrade or deactivate another
+        // member before they fill out the whole form.
+        if (seatCapacity.available && seatCapacity.seatsLimit !== null && seatCapacity.isFull) {
+            setUpgradeOpen(true);
+            return;
+        }
+
         try {
             await createEmployee.mutateAsync(payload);
+
+            // Every invite is held `pending` until the person accepts: the
+            // invite is emailed, but the member only becomes Active (and takes
+            // a seat) once they set their password. Say so plainly instead of
+            // implying they are immediately usable.
             toast.success('Invitation sent', {
-                description: `${values.name} was added as ${EMPLOYEE_ROLE_LABELS[values.role]} and emailed a link to set their password.`,
+                description: `${values.name} was added as ${EMPLOYEE_ROLE_LABELS[values.role]} and emailed a link to set their password. They become Active once they accept.`,
             });
             onOpenChange(false);
         } catch (error) {
+            // A `422 EMPLOYEE_CAPACITY_REACHED` means the seat allowance is full
+            // and stale on our side. Surface the upgrade prompt, always refetching
+            // seats so the count is refreshed.
+            const seatError = await handleCapacityError(error, () => seatCapacity.refetch());
+            if (seatError) {
+                setUpgradeOpen(true);
+                return;
+            }
+
             // Surface the real reason (e.g. duplicate email) instead of a generic message.
             toast.error('Unable to add employee', {
                 description: getApiErrorMessage(error, 'Something went wrong. Please try again.'),
@@ -167,26 +175,6 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps):
         }
 
     });
-
-    /** Increase the selected branch's employee capacity via the billing API. */
-    const handleCapacityConfirm = async (employeeCapacity: number): Promise<void> => {
-        if (!capacityBranch) return;
-        try {
-            await updateCapacity.mutateAsync({
-                branchId: capacityBranch.id,
-                employeeCapacity,
-            });
-            toast.success('Capacity updated', {
-                description: `${capacityBranch.name} now holds up to ${employeeCapacity} employees.`,
-            });
-            setCapacityOpen(false);
-            setCapacityBranch(null);
-        } catch (error) {
-            toast.error('Unable to update capacity', {
-                description: getApiErrorMessage(error, 'Please try again.'),
-            });
-        }
-    };
 
     const hasDepartments = !isLoadingDepartments && departmentOptions.length > 0;
 
@@ -443,20 +431,56 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps):
                                             ? 'No branches yet — you can assign one later under Branches.'
                                             : 'You can assign or change the branch at any time.'}
                                     </p>
-                                    {selectedBranchUsage && (
+
+                                    {/* Active-user (seat) soft warning — the plan's seat
+                                        allowance is separate from branch capacity. */}
+                                    {seatCapacity.available && seatCapacity.seatsLimit !== null && (
                                         <CapacityWarning
-                                            used={selectedBranchUsage.employeesUsed}
-                                            capacity={selectedBranchUsage.employeeCapacity}
+                                            used={seatCapacity.seatsUsed}
+                                            capacity={seatCapacity.seatsLimit}
                                             action={
-                                                <IncreaseCapacityButton
-                                                    onClick={() => {
-                                                        setCapacityBranch(selectedBranchUsage);
-                                                        setCapacityOpen(true);
-                                                    }}
-                                                />
+                                                seatCapacity.isFull ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setUpgradeOpen(true)}
+                                                        className={cn(
+                                                            'inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 text-xs font-semibold text-primary transition-colors',
+                                                            'hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                                        )}
+                                                    >
+                                                        Upgrade plan
+                                                    </button>
+                                                ) : undefined
                                             }
                                         />
                                     )}
+                                    <p
+                                        role="note"
+                                        className={cn(
+                                            'rounded-lg border p-3 text-xs text-foreground',
+                                            seatCapacity.isFull
+                                                ? 'border-danger/30 bg-danger/10'
+                                                : 'border-warning/30 bg-warning/10',
+                                        )}
+                                    >
+                                        {seatCapacity.isFull ? (
+                                            <>
+                                                Your plan is at its{' '}
+                                                <span className="font-medium">member limit</span>, so
+                                                this invite can't be sent yet. Deactivate another team
+                                                member to free a seat, or{' '}
+                                                <span className="font-medium">upgrade your plan</span> to
+                                                add more.
+                                            </>
+                                        ) : (
+                                            <>
+                                                The new member is added as{' '}
+                                                <span className="font-medium">Pending</span> and only
+                                                becomes Active — taking a seat — once they accept their
+                                                invitation and set a password.
+                                            </>
+                                        )}
+                                    </p>
                                 </div>
                             </div>
 
@@ -476,7 +500,7 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps):
                                 </Dialog.Close>
                                 <button
                                     type="submit"
-                                    disabled={isSubmitting || isBranchAtCapacity}
+                                    disabled={isSubmitting}
                                     className={cn(
                                         'inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors',
                                         'hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
@@ -497,17 +521,18 @@ export function AddEmployeeModal({ open, onOpenChange }: AddEmployeeModalProps):
                     </Dialog.Content>
                 </Dialog.Portal>
             </Dialog.Root>
-            <BranchCapacityDialog
-                open={capacityOpen}
-                branch={capacityBranch}
-                currentCapacity={capacityBranch?.employeeCapacity ?? null}
-                suggestedMax={null}
-                isPending={updateCapacity.isPending}
-                onOpenChange={(next) => {
-                    setCapacityOpen(next);
-                    if (!next) setCapacityBranch(null);
-                }}
-                onConfirm={handleCapacityConfirm}
+
+            {/* Upgrade prompt surfaced when adding a member is blocked by the
+                plan's active-user seat allowance. */}
+            <UpgradePromptDialog
+                open={upgradeOpen}
+                seatsNeeded={
+                    seatCapacity.seatsLimit !== null
+                        ? seatCapacity.seatsUsed + 1
+                        : 1
+                }
+                selectedCycle="monthly"
+                onOpenChange={setUpgradeOpen}
             />
         </>
     );

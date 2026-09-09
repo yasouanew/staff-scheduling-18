@@ -323,6 +323,24 @@ function CompanyDetail({ id }: { id: string }): JSX.Element {
                     <h2 className="mb-4 text-base font-semibold tracking-tight text-foreground">
                         Plan & Billing
                     </h2>
+                    {subscription && (
+                        <div className="mb-4">
+                            <span
+                                className={cn(
+                                    'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium',
+                                    subscription.seatsLimit !== null &&
+                                        subscription.seatsUsed > subscription.seatsLimit
+                                        ? 'bg-danger/10 text-danger'
+                                        : 'bg-primary/10 text-primary',
+                                )}
+                            >
+                                <Users className="h-3.5 w-3.5" aria-hidden="true" />
+                                {subscription.seatsLimit === null
+                                    ? `${subscription.seatsUsed} active users (seats) used`
+                                    : `${subscription.seatsUsed} / ${subscription.seatsLimit} active users (seats)`}
+                            </span>
+                        </div>
+                    )}
                     {!subscription ? (
                         <div className="flex flex-col items-center gap-3 py-6 text-center">
                             <CreditCard className="h-6 w-6 text-muted-foreground" aria-hidden="true" />

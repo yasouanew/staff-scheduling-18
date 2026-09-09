@@ -116,14 +116,12 @@ export function BranchDayEditorDialog({
     }, [open, summary]);
 
     const employees = useMemo(() => {
-        const active = (employeesQuery.data ?? []).filter(
-            (employee) => employee.status === 'active',
-        );
+        const all = employeesQuery.data ?? [];
         const term = employeeSearch.trim().toLowerCase();
 
-        if (!term) return active;
+        if (!term) return all;
 
-        return active.filter(
+        return all.filter(
             (employee) =>
                 employee.name.toLowerCase().includes(term) ||
                 employee.position.toLowerCase().includes(term),
@@ -351,8 +349,13 @@ export function BranchDayEditorDialog({
                                             >
                                                 <option value="">Leave open (unfilled)</option>
                                                 {employees.map((employee) => (
-                                                    <option key={employee.id} value={employee.id}>
+                                                    <option
+                                                        key={employee.id}
+                                                        value={employee.id}
+                                                        disabled={employee.status !== 'active'}
+                                                    >
                                                         {employee.name} — {employee.position}
+                                                        {employee.status !== 'active' ? ` (${employee.status})` : ''}
                                                     </option>
                                                 ))}
                                             </select>
@@ -414,7 +417,7 @@ export function BranchDayEditorDialog({
                             <p className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground">
                                 {employeeSearch
                                     ? 'No employees match your search.'
-                                    : 'No active employees are assigned to this branch yet.'}
+                                    : 'No employees are assigned to this branch yet.'}
                             </p>
                         ) : null}
                     </section>

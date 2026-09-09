@@ -61,6 +61,12 @@ class CheckCompanyAccess
             $company->forceFill(['locked_at' => now()])->save();
         }
 
+        // Allow access to employee management and related directory metadata routes
+        // so that companies in account-locked mode can still manage their employees.
+        if ($this->isEmployeeManagementRoute($request)) {
+            return $next($request);
+        }
+
         return response()->json([
             'success' => false,
             'message' => 'Your trial has ended. Activate a subscription to continue using Rosterly.',
@@ -70,5 +76,27 @@ class CheckCompanyAccess
                 'locked_at' => $company->locked_at?->toIso8601String(),
             ],
         ], 423);
+    }
+
+    /**
+     * Determine whether the request targets employee management or supporting
+     * directory lookups (branches, departments, positions) that must remain
+     * accessible when a company is locked.
+     */
+    protected function isEmployeeManagementRoute(Request $request): bool
+    {
+        if ($request->is('api/v1/employees*')) {
+            return true;
+        }
+
+        if ($request->isMethod('GET') && (
+            $request->is('api/v1/branches*') ||
+            $request->is('api/v1/departments*') ||
+            $request->is('api/v1/positions*')
+        )) {
+            return true;
+        }
+
+        return false;
     }
 }

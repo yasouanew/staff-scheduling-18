@@ -101,6 +101,23 @@ class StripeCheckoutFlowTest extends TestCase
                 ];
             }
 
+            public function startOneOffCheckout(
+                User $user,
+                float $amount,
+                string $currency,
+                string $description,
+                string $subscriptionId,
+                string $planId,
+                string $cycle,
+                ?string $successUrl,
+                ?string $cancelUrl,
+            ): array {
+                return [
+                    'url' => 'https://checkout.stripe.test/one-off/'.$subscriptionId,
+                    'session_id' => 'cs_test_oneoff_'.$subscriptionId,
+                ];
+            }
+
             public function cancel(User $user, Subscription $subscription, bool $immediately = false): void
             {
                 // no-op
@@ -111,9 +128,10 @@ class StripeCheckoutFlowTest extends TestCase
                 // no-op
             }
 
-            public function swap(User $user, Subscription $subscription, Plan $plan, string $cycle): void
+            public function swap(User $user, Subscription $subscription, Plan $plan, string $cycle, array $options = []): ?array
             {
                 // no-op
+                return null;
             }
 
             public function billingPortal(User $user, ?string $returnUrl = null): string
@@ -151,6 +169,32 @@ class StripeCheckoutFlowTest extends TestCase
     protected function activateBranchViaApi(Branch $branch): void
     {
         $this->postJson("/api/v1/branches/{$branch->id}/activate")->assertOk();
+    }
+
+    /**
+     * Creates active member accounts (each consuming a seat) assigned to a
+     * branch, plus their employee rows. Every linked user must have the
+     * company's `company_id` set so it is counted by the seat-based downgrade
+     * guard — `Employee::factory()` alone would create users with
+     * `company_id = null`, which are not active seats.
+     */
+    protected function createActiveMemberSeats(Company $company, Branch $branch, int $count): void
+    {
+        $users = User::factory()->count($count)->create([
+            'company_id' => $company->id,
+            'status' => 'active',
+        ]);
+
+        foreach ($users as $user) {
+            $user->assignRole('employee');
+
+            Employee::factory()->create([
+                'company_id' => $company->id,
+                'user_id' => $user->id,
+                'branch_id' => $branch->id,
+                'status' => 'active',
+            ]);
+        }
     }
 
     /*
@@ -303,11 +347,9 @@ class StripeCheckoutFlowTest extends TestCase
         $this->actingAsCompanyAdmin($company);
         $this->activateBranchViaApi($branch);
 
-        // 40 active employees exceed the target's 25 capacity.
-        Employee::factory()->count(40)->create([
-            'company_id' => $company->id,
-            'branch_id' => $branch->id,
-        ]);
+        // 40 active member accounts (each a seat) + the acting admin
+        // => 41 active seats exceed the target's 25 capacity.
+        $this->createActiveMemberSeats($company, $branch, 40);
 
         $this->postJson("/api/v1/companies/{$company->id}/subscriptions", [
             'plan_id' => $target->id,
@@ -317,7 +359,7 @@ class StripeCheckoutFlowTest extends TestCase
             ->assertStatus(422)
             ->assertJsonPath('success', false)
             ->assertJsonPath('code', 'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED')
-            ->assertJsonPath('errors.used', 40)
+            ->assertJsonPath('errors.used', 41)
             ->assertJsonPath('errors.capacity', 25);
 
         $this->assertDatabaseMissing('subscriptions', [

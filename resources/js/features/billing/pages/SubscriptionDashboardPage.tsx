@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { format, parseISO } from 'date-fns';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
     AlertTriangle,
-    Building2,
     CheckCircle2,
     CreditCard,
     ExternalLink,
@@ -15,7 +14,6 @@ import {
 } from 'lucide-react';
 
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
-
 import { Button } from '@/Components/ui/button';
 import { Badge } from '@/Components/ui/badge';
 import {
@@ -45,17 +43,17 @@ import { LoadingSkeleton } from '@/Components/common/LoadingSkeleton';
 import { PageHeader } from '@/Components/common/PageHeader';
 import { StatCard } from '@/Components/common/StatCard';
 import { getApiErrorMessage } from '@/lib/api-client';
+import { handleCapacityError } from '@/lib/capacity-errors';
 
 import { useWebSession, WEB_SESSION_KEY } from '@/features/auth/hooks/useWebSession';
+import { useSeatCapacity } from '@/features/billing/context/SeatCapacityContext';
 
 import type { BillingPayment } from '@/types/billing';
-import type { BranchUsageItem, BillingCycle, ManagementPlan, SubscriptionSummary } from '../types';
+import type { BillingCycle, ManagementPlan, SubscriptionSummary } from '../types';
 import { formatCapacity, formatCyclePrice } from '../lib/format';
-import { canManageBilling, canManageBranchBilling, canViewBilling } from '../lib/permissions';
+import { canManageBilling, canViewBilling } from '../lib/permissions';
 import {
     getBillingErrorCode,
-    isBranchLimitReachedError,
-    isCapacityReachedError,
     isSubscriptionInvalidError,
 } from '../lib/billing-errors';
 import {
@@ -63,38 +61,29 @@ import {
     useCancelSubscription,
     useChangeBillingPeriod,
     useConfirmCheckout,
+    useDiscardIncompleteCheckout,
     useDowngradeSubscription,
     useManagementPlans,
+    usePlanChangeEstimate,
     useResumeSubscription,
+    useRetryCheckout,
     useSelfServiceCheckout,
     useSubscriptionInvoices,
     useSubscriptionSummary,
     useUpgradeSubscription,
     useUsageOverview,
 } from '../hooks/useSubscription';
-import {
-    useActivateBranch,
-    useDeactivateBranch,
-    useUpdateBranchCapacity,
-} from '../hooks/useBranchBilling';
-import { BranchCapacityDialog } from '../components/BranchCapacityDialog';
-import { BranchUsageCard } from '../components/BranchUsageCard';
+import { DowngradeConflictDialog } from '../components/DowngradeConflictDialog';
 import { PlanCard } from '../components/PlanCard';
 import { UpgradePlanDialog, isDowngradeDirection } from '../components/UpgradePlanDialog';
 
-type BillingTab = 'overview' | 'plan' | 'usage' | 'branches' | 'billing' | 'invoices';
+type BillingTab = 'overview' | 'plan' | 'usage' | 'billing' | 'invoices';
 
 const CYCLE_OPTIONS: { value: BillingCycle; label: string }[] = [
     { value: 'monthly', label: 'Monthly' },
     { value: 'six_month', label: '6 months' },
     { value: 'yearly', label: 'Yearly' },
 ];
-
-/** Branch capacity a plan allows per branch (hint only; backend is authoritative). */
-function planBranchCapacity(plan: { maxEmployees: number | null } | null, current: number | null): number | null {
-    if (current !== null) return current;
-    return plan?.maxEmployees ?? null;
-}
 
 /** Human-friendly subscription status label. */
 function subscriptionStatusLabel(status: string | undefined): string {
@@ -215,6 +204,9 @@ function InvoiceHistoryTable({
                             <th className="px-4 py-3">Date</th>
                             <th className="px-4 py-3">Amount</th>
                             <th className="px-4 py-3">Status</th>
+                            <th className="px-4 py-3">Subscription</th>
+                            <th className="px-4 py-3">Subscribed</th>
+                            <th className="px-4 py-3">Expires</th>
                             <th className="px-4 py-3">Reference</th>
                         </tr>
                     </thead>
@@ -231,6 +223,24 @@ function InvoiceHistoryTable({
                                     <Badge variant={statusTone(invoice.status)}>
                                         {invoice.status.replace(/_/g, ' ')}
                                     </Badge>
+                                </td>
+                                {/* Owning subscription state: "Expired" / "Active" / … */}
+                                <td className="px-4 py-4">
+                                    {invoice.subscription ? (
+                                        <Badge variant={statusTone(invoice.subscription.status)}>
+                                            {invoice.subscription.status.replace(/_/g, ' ')}
+                                        </Badge>
+                                    ) : (
+                                        <span className="text-muted-foreground">—</span>
+                                    )}
+                                </td>
+                                {/* Subscription period start date. */}
+                                <td className="px-4 py-4 text-muted-foreground">
+                                    {formatDate(invoice.subscription?.startsAt)}
+                                </td>
+                                {/* Subscription period end (expiry) date. */}
+                                <td className="px-4 py-4 text-muted-foreground">
+                                    {formatDate(invoice.subscription?.endsAt)}
                                 </td>
                                 <td className="px-4 py-4 text-muted-foreground">
                                     {invoice.reference ?? '—'}
@@ -275,6 +285,7 @@ function CheckoutDialog({
     open,
     plan,
     selectedCycle,
+    seatUsed,
     isPending,
     onCycleChange,
     onOpenChange,
@@ -283,11 +294,21 @@ function CheckoutDialog({
     open: boolean;
     plan: ManagementPlan | null;
     selectedCycle: BillingCycle;
+    /** Active user accounts currently counted (authoritative seat usage). */
+    seatUsed: number;
     isPending: boolean;
     onCycleChange: (cycle: BillingCycle) => void;
     onOpenChange: (open: boolean) => void;
     onConfirm: (plan: ManagementPlan, cycle: BillingCycle) => void;
 }): JSX.Element {
+    /*
+     * Pre-flight seat check: a plan whose seat allowance is smaller than the
+     * current active-user count can never be subscribed to (the backend rejects
+     * it with `DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED`). Surface that before the
+     * admin reaches Stripe — they must deactivate members or pick a larger plan.
+     */
+    const seatConflict = plan !== null && plan.maxSeats !== null && seatUsed > plan.maxSeats;
+    const excess = seatConflict ? seatUsed - (plan?.maxSeats ?? seatUsed) : 0;
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-w-lg">
@@ -316,14 +337,39 @@ function CheckoutDialog({
 
                             <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
                                 <p className="text-muted-foreground">
-                                    Branches:{' '}
-                                    <span className="font-medium text-foreground">{formatCapacity(plan.maxBranches)}</span>
+                                    Active users (seats):{' '}
+                                    <span className="font-medium text-foreground">{formatCapacity(plan.maxSeats)}</span>
                                 </p>
                                 <p className="text-muted-foreground">
-                                    Employees:{' '}
-                                    <span className="font-medium text-foreground">{formatCapacity(plan.maxEmployees)}</span>
+                                    Currently used:{' '}
+                                    <span className={seatConflict ? 'font-medium text-danger' : 'font-medium text-foreground'}>
+                                        {seatUsed}
+                                    </span>
                                 </p>
                             </div>
+
+                            {seatConflict && (
+                                <div className="mt-3 flex items-start gap-2 rounded-lg border border-danger/30 bg-danger/5 p-3 text-sm text-foreground">
+                                    <AlertTriangle className="mt-0.5 size-5 shrink-0 text-danger" aria-hidden="true" />
+                                    <div className="space-y-1">
+                                        <p className="font-medium text-foreground">
+                                            {seatUsed} active users vs {formatCapacity(plan.maxSeats)} allowed
+                                        </p>
+                                        <p className="text-muted-foreground">
+                                            Deactivate at least <span className="font-medium text-foreground">{excess}</span>{' '}
+                                            {excess === 1 ? 'account' : 'accounts'} before subscribing, or choose a plan
+                                            with enough seats.
+                                        </p>
+                                        <Link
+                                            to="/employees"
+                                            className="inline-flex h-8 shrink-0 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                                        >
+                                            Manage members
+                                        </Link>
+
+                                    </div>
+                                </div>
+                            )}
 
                             {plan.features.length > 0 && (
                                 <div className="mt-4 flex flex-wrap gap-1.5">
@@ -360,7 +406,7 @@ function CheckoutDialog({
                         Cancel
                     </Button>
                     <Button
-                        disabled={!plan}
+                        disabled={!plan || seatConflict}
                         loading={isPending}
                         loadingLabel="Redirecting to Stripe…"
                         onClick={() => {
@@ -389,15 +435,12 @@ export default function SubscriptionDashboardPage(): JSX.Element {
 
     const canView = canViewBilling(user);
     const canManage = canManageBilling(user);
-    const canManageBranch = canManageBranchBilling(user);
 
     const summary = useSubscriptionSummary();
     const usageOverview = useUsageOverview();
     const plansQuery = useManagementPlans();
+    const seatCapacity = useSeatCapacity();
 
-    const activateBranch = useActivateBranch();
-    const deactivateBranch = useDeactivateBranch();
-    const updateCapacity = useUpdateBranchCapacity();
     const upgrade = useUpgradeSubscription();
     const downgrade = useDowngradeSubscription();
     const billingPortal = useBillingPortal();
@@ -406,6 +449,8 @@ export default function SubscriptionDashboardPage(): JSX.Element {
     const resumeSubscription = useResumeSubscription();
     const changeBillingPeriod = useChangeBillingPeriod();
     const confirmCheckout = useConfirmCheckout();
+    const retryCheckout = useRetryCheckout();
+    const discardIncomplete = useDiscardIncompleteCheckout();
 
     const queryClient = useQueryClient();
     const navigate = useNavigate();
@@ -471,11 +516,17 @@ export default function SubscriptionDashboardPage(): JSX.Element {
     const [checkoutOpen, setCheckoutOpen] = useState(false);
     const [checkoutCycle, setCheckoutCycle] = useState<BillingCycle>('monthly');
 
-    const [capacityBranch, setCapacityBranch] = useState<BranchUsageItem | null>(null);
-    const [capacityOpen, setCapacityOpen] = useState(false);
-
-    const [deactivateTarget, setDeactivateTarget] = useState<BranchUsageItem | null>(null);
     const [cancelOpen, setCancelOpen] = useState(false);
+
+    /*
+     * Downgrade-conflict state: when a plan downgrade is rejected because the
+     * company already has more active user accounts than the target plan allows,
+     * we surface this non-blocking dialog pointing the admin at the directory.
+     */
+    const [downgradeConflict, setDowngradeConflict] = useState<{
+        used: number;
+        cap: number | null;
+    } | null>(null);
 
     const [invoicePage, setInvoicePage] = useState(1);
 
@@ -489,6 +540,14 @@ export default function SubscriptionDashboardPage(): JSX.Element {
     const plans = plansQuery.data ?? [];
     const data = summary.data;
 
+    // Server-computed proration estimate for the plan-change dialog. Only
+    // fetched while the dialog is open and the business has an entitled
+    // subscription (fresh checkouts have nothing to prorate).
+    const planChangeEstimate = usePlanChangeEstimate(
+        planDialogOpen && data?.entitled ? targetPlan?.id ?? null : null,
+        selectedCycle,
+    );
+
     const currentPlan = data?.plan ?? null;
     const subscription = data?.subscription ?? null;
     /**
@@ -499,26 +558,24 @@ export default function SubscriptionDashboardPage(): JSX.Element {
         currentPlan === null
             ? []
             : data?.features?.filter((feature) => feature.enabled).map((feature) => feature.label) ?? [];
-    /**
-     * Branch usage comes from the dedicated `GET /subscription/usage` endpoint,
-     * which carries `name`/`active` for every branch. The summary's `branch_usage`
-     * (`UsageService::usageFor()`) is name-less, so it is only a fallback while the
-     * richer query is loading.
+    /*
+     * Active-user (seat) usage. A "seat" is one active, non-super-admin user
+     * account in the company. The overview endpoint carries the authoritative
+     * count/allowance; the summary's `usage.seats` is a fallback while it loads.
      */
-    const usageFromOverview: BranchUsageItem[] = usageOverview.data?.branchesUsage ?? [];
-    const branchUsage: BranchUsageItem[] =
-        usageFromOverview.length > 0 ? usageFromOverview : (data?.usage?.branchUsage ?? []);
-    const activeBranches = usageOverview.data?.branches?.used ?? data?.usage?.branches?.used ?? 0;
-    const branchLimit = usageOverview.data?.branches?.limit ?? data?.usage?.branches?.limit ?? null;
-    const branchLimitReached = branchLimit !== null && activeBranches >= branchLimit;
-
-    const totalEmployees = branchUsage.reduce((sum, branch) => sum + branch.employeesUsed, 0);
-    const capacityLimit = currentPlan?.maxEmployees ?? null;
+    const seatUsed = usageOverview.data?.seats?.used ?? data?.usage?.seats?.used ?? 0;
+    const seatLimit = usageOverview.data?.seats?.limit ?? data?.usage?.seats?.limit ?? null;
+    const seatFull = seatLimit !== null && seatUsed >= seatLimit;
 
     const isPastDue = subscription?.status === 'past_due';
     const isCancelled = subscription?.isCancelled ?? false;
-
-    const busy = activateBranch.isPending || deactivateBranch.isPending || updateCapacity.isPending;
+    const isExpired = subscription?.status === 'expired';
+    /**
+     * A Stripe Checkout was started but never paid — the row exists locally in
+     * `incomplete` state. The admin must be able to finish the payment (fresh
+     * session for the same plan/cycle) or discard the attempt.
+     */
+    const isIncomplete = subscription?.status === 'incomplete';
 
     /* ------------------------------------------------------------------ */
     /* Handlers                                                             */
@@ -541,16 +598,60 @@ export default function SubscriptionDashboardPage(): JSX.Element {
         const isDown = isDowngradeDirection(data ?? null, plan);
         const mutation = isDown ? downgrade : upgrade;
         try {
-            await mutation.mutateAsync({ planId: plan.id, billingCycle: selectedCycle });
+            const result = await mutation.mutateAsync({ planId: plan.id, billingCycle: selectedCycle });
+
             setPlanDialogOpen(false);
             setTargetPlan(null);
+
+            // No default card on file: the hook already forwarded the browser
+            // to the hosted Checkout session for the prorated "rest of the
+            // money" — the plan is applied once the payment completes.
+            if (result.checkoutUrl) {
+                toast.info('Redirecting to payment…', {
+                    description: 'Complete the payment to finish switching your plan.',
+                });
+                return;
+            }
+
+            const formatMoney = (amount: number, currency: string): string =>
+                `${amount.toFixed(2)} ${currency}`;
+
+            if (isDown && result.refund) {
+                toast.success('Plan downgraded', {
+                    description: `${formatMoney(result.refund.amount, result.refund.currency)} refunded for the rest of your current billing period.`,
+                });
+                return;
+            }
+
+            if (!isDown && result.charge) {
+                toast.success('Plan upgraded', {
+                    description: `${formatMoney(result.charge.amount, result.charge.currency)} charged for the rest of your current billing period.`,
+                });
+                return;
+            }
+
             toast.success(isDown ? 'Plan downgraded' : 'Plan upgraded');
         } catch (planError) {
+            // A `422 DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED` means the target plan's
+            // seat allowance is smaller than the current active-user count. The
+            // backend's numbers are authoritative, so always refetch seats, then
+            // surface the dedicated conflict dialog instead of a generic toast.
+            const seatError = await handleCapacityError(planError, () => seatCapacity.refetch());
+            if (seatError && seatError.code === 'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED') {
+                setPlanDialogOpen(false);
+                setTargetPlan(null);
+                setDowngradeConflict({
+                    used: seatError.used ?? seatUsed,
+                    cap: seatError.capacity ?? seatLimit,
+                });
+                return;
+            }
+
             const code = getBillingErrorCode(planError);
-            if (code === 'DOWNGRADE_BRANCH_LIMIT_EXCEEDED' || code === 'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED') {
+            if (code === 'DOWNGRADE_BRANCH_LIMIT_EXCEEDED') {
                 toast.error('Cannot change plan', {
                     description:
-                        'Your current branch or employee usage exceeds the new plan limits. Reduce usage first, then try again.',
+                        'Your current branch usage exceeds the new plan limits. Reduce usage first, then try again.',
                 });
             } else if (isSubscriptionInvalidError(planError)) {
                 toast.error('Subscription issue', {
@@ -572,8 +673,61 @@ export default function SubscriptionDashboardPage(): JSX.Element {
             // The Stripe session is created server-side; bounce the browser there.
             window.location.assign(url);
         } catch (checkoutError) {
-            toast.error('Unable to start checkout', {
-                description: getApiErrorMessage(checkoutError, 'Please try again.'),
+            // A `422 DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED` means the target plan's
+            // seat allowance is smaller than the current active-user count —
+            // including the fresh-checkout path where the company has no
+            // entitled subscription yet. The backend's numbers are authoritative,
+            // so surface the dedicated conflict dialog instead of a generic toast.
+            const seatError = await handleCapacityError(checkoutError, () => seatCapacity.refetch());
+            if (seatError && seatError.code === 'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED') {
+                setCheckoutOpen(false);
+                setCheckoutPlan(null);
+                setDowngradeConflict({
+                    used: seatError.used ?? seatUsed,
+                    cap: seatError.capacity ?? seatLimit,
+                });
+                return;
+            }
+
+            const code = getBillingErrorCode(checkoutError);
+            if (code === 'DOWNGRADE_BRANCH_LIMIT_EXCEEDED') {
+                toast.error('Cannot subscribe to this plan', {
+                    description:
+                        'Your current branch usage exceeds the plan limits. Reduce usage first, then try again.',
+                });
+            } else {
+                toast.error('Unable to start checkout', {
+                    description: getApiErrorMessage(checkoutError, 'Please try again.'),
+                });
+            }
+        }
+    };
+
+    /**
+     * Resumes an abandoned checkout: closes the stale `incomplete` row and
+     * redirects the browser to a fresh Stripe session for the same plan/cycle.
+     */
+    const handleRetryCheckout = async (): Promise<void> => {
+        try {
+            const url = await retryCheckout.mutateAsync();
+            window.location.assign(url);
+        } catch (retryError) {
+            toast.error('Unable to resume checkout', {
+                description: getApiErrorMessage(retryError, 'Please try again.'),
+            });
+        }
+    };
+
+    /** Abandons the pending `incomplete` checkout so any plan can be chosen. */
+    const handleDiscardIncomplete = async (): Promise<void> => {
+        try {
+            await discardIncomplete.mutateAsync();
+            toast.success('Pending checkout discarded', {
+                description: 'You can now choose any plan from the catalogue.',
+            });
+        } catch (discardError) {
+            toast.error('Unable to discard the pending checkout', {
+                description: getApiErrorMessage(discardError, 'Please try again.'),
             });
         }
     };
@@ -622,84 +776,6 @@ export default function SubscriptionDashboardPage(): JSX.Element {
         } catch (cycleError) {
             toast.error('Unable to update billing cycle', {
                 description: getApiErrorMessage(cycleError, 'Please try again.'),
-            });
-        }
-    };
-
-    const handleActivate = (branch: BranchUsageItem): void => {
-        setCapacityBranch(branch);
-        setCapacityOpen(true);
-    };
-
-    const handleActivateConfirm = async (employeeCapacity: number): Promise<void> => {
-        if (!capacityBranch) return;
-        try {
-            await activateBranch.mutateAsync({
-                branchId: capacityBranch.id,
-                employeeCapacity,
-            });
-            setCapacityOpen(false);
-            setCapacityBranch(null);
-            toast.success(`${capacityBranch.name} activated`);
-        } catch (activateError) {
-            if (isBranchLimitReachedError(activateError)) {
-                toast.error('Branch limit reached', {
-                    description: 'Your plan does not allow more active branches. Upgrade your plan to add this branch.',
-                });
-            } else if (isCapacityReachedError(activateError)) {
-                toast.error('Employee capacity reached', {
-                    description: 'The requested capacity exceeds what this plan allows.',
-                });
-            } else if (isSubscriptionInvalidError(activateError)) {
-                toast.error('Subscription issue', {
-                    description: 'Your subscription is expired or past due. Please renew it before activating branches.',
-                });
-            } else {
-                toast.error('Unable to activate branch', {
-                    description: getApiErrorMessage(activateError, 'Please try again.'),
-                });
-            }
-        }
-    };
-
-    const handleIncreaseCapacity = (branch: BranchUsageItem): void => {
-        setCapacityBranch(branch);
-        setCapacityOpen(true);
-    };
-
-    const handleCapacityConfirm = async (employeeCapacity: number): Promise<void> => {
-        if (!capacityBranch) return;
-        try {
-            await updateCapacity.mutateAsync({
-                branchId: capacityBranch.id,
-                employeeCapacity,
-            });
-            setCapacityOpen(false);
-            setCapacityBranch(null);
-            toast.success('Branch capacity updated');
-        } catch (capacityError) {
-            if (isCapacityReachedError(capacityError)) {
-                toast.error('Capacity update failed', {
-                    description: 'The requested capacity is below the number of employees currently assigned.',
-                });
-            } else {
-                toast.error('Unable to update capacity', {
-                    description: getApiErrorMessage(capacityError, 'Please try again.'),
-                });
-            }
-        }
-    };
-
-    const handleDeactivateConfirm = async (): Promise<void> => {
-        if (!deactivateTarget) return;
-        const name = deactivateTarget.name;
-        try {
-            await deactivateBranch.mutateAsync({ branchId: deactivateTarget.id });
-            setDeactivateTarget(null);
-            toast.success(`${name} deactivated`);
-        } catch (deactivateError) {
-            toast.error('Unable to deactivate branch', {
-                description: getApiErrorMessage(deactivateError, 'Please try again.'),
             });
         }
     };
@@ -764,7 +840,7 @@ export default function SubscriptionDashboardPage(): JSX.Element {
             <PageHeader
                 eyebrow="Billing"
                 title="Subscription & Billing"
-                description="Manage your plan, branch availability and employee capacity across your workspace."
+                description="Manage your plan, active-user seats and billing across your workspace."
             />
 
             {error && (
@@ -804,6 +880,72 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                 </section>
             )}
 
+            {/* Unfinished-checkout banner: the payment was never completed. */}
+            {isIncomplete && (
+                <section className="flex flex-col gap-3 rounded-xl border border-warning/30 bg-warning/5 p-5 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-warning" aria-hidden="true" />
+                        <div className="space-y-1">
+                            <h2 className="text-base font-semibold tracking-tight text-foreground">
+                                Your payment wasn't completed.
+                            </h2>
+                            <p className="text-sm text-muted-foreground">
+                                A checkout for the {data?.plan?.name ?? 'selected'} plan was started but never paid,
+                                so it is not active yet. Complete the payment to activate it, or discard the attempt
+                                and choose a different plan.
+                            </p>
+                        </div>
+                    </div>
+                    {canManage && (
+                        <div className="flex shrink-0 gap-2">
+                            <Button
+                                variant="outline"
+                                loading={discardIncomplete.isPending}
+                                loadingLabel="Discarding…"
+                                onClick={handleDiscardIncomplete}
+                            >
+                                Discard
+                            </Button>
+                            <Button
+                                loading={retryCheckout.isPending}
+                                loadingLabel="Redirecting to Stripe…"
+                                onClick={handleRetryCheckout}
+                            >
+                                Complete payment
+                            </Button>
+                        </div>
+                    )}
+                </section>
+            )}
+
+            {/* Expired subscription banner with the billing portal link. */}
+            {isExpired && (
+                <section className="flex flex-col gap-3 rounded-xl border border-danger/30 bg-danger/5 p-5 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-danger" aria-hidden="true" />
+                        <div className="space-y-1">
+                            <h2 className="text-base font-semibold tracking-tight text-foreground">
+                                Your subscription expired on {formatDate(subscription?.endsAt)}.
+                            </h2>
+                            <p className="text-sm text-muted-foreground">
+                                Renew from the billing portal or choose a new plan to restore access. Your previous
+                                subscription records and invoices are listed below.
+                            </p>
+                        </div>
+                    </div>
+                    {canManage && (
+                        <Button
+                            variant="destructive"
+                            loading={billingPortal.isPending}
+                            loadingLabel="Opening portal…"
+                            onClick={handleOpenBillingPortal}
+                        >
+                            Open billing portal
+                        </Button>
+                    )}
+                </section>
+            )}
+
             {/* Activation banner (no entitled subscription). */}
             {data && !data.entitled ? (
                 <section className="flex flex-col gap-3 rounded-xl border border-primary/30 bg-primary/5 p-5 sm:flex-row sm:items-center sm:justify-between">
@@ -824,7 +966,6 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                     <TabsTrigger value="overview">Overview</TabsTrigger>
                     <TabsTrigger value="plan">Plan</TabsTrigger>
                     <TabsTrigger value="usage">Usage</TabsTrigger>
-                    <TabsTrigger value="branches">Branches</TabsTrigger>
                     <TabsTrigger value="billing">Billing</TabsTrigger>
                     <TabsTrigger value="invoices">Invoices</TabsTrigger>
                 </TabsList>
@@ -849,18 +990,17 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                             description={subscription?.billingCycle ? `${subscription.billingCycle.replace('_', ' ')} billing` : 'No billing cycle'}
                         />
                         <StatCard
-                            title="Active branches"
-                            value={branchLimit === null ? String(activeBranches) : `${activeBranches} / ${branchLimit}`}
-                            icon={Building2}
-                            tone="success"
-                            description={branchLimit === null ? 'Unlimited allowed' : 'active branches'}
-                        />
-                        <StatCard
-                            title="Employee capacity"
-                            value={capacityLimit === null ? String(totalEmployees) : `${totalEmployees} / ${capacityLimit}`}
+                            title="Active users (seats)"
+                            value={seatLimit === null ? String(seatUsed) : `${seatUsed} / ${seatLimit}`}
                             icon={Users}
-                            tone={capacityLimit !== null && totalEmployees >= capacityLimit ? 'danger' : 'info'}
-                            description={capacityLimit === null ? 'Unlimited employees' : 'across active branches'}
+                            tone={seatFull ? 'danger' : 'success'}
+                            description={
+                                seatLimit === null
+                                    ? 'Unlimited user accounts'
+                                    : seatFull
+                                        ? 'plan limit reached'
+                                        : 'active user accounts'
+                            }
                         />
                     </div>
 
@@ -927,6 +1067,59 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                             </div>
                         </CardContent>
                     </Card>
+
+                    {/* Previous subscription records (including expired ones). */}
+                    {data?.subscriptionHistory && data.subscriptionHistory.length > 0 && (
+                        <Card>
+                            <CardHeader>
+                                <CardTitle>Subscription history</CardTitle>
+                                <CardDescription>
+                                    Every subscription record for your workspace, including expired periods.
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                <div className="overflow-x-auto rounded-xl border border-border">
+                                    <table className="w-full text-left text-sm">
+                                        <thead className="bg-muted/40 text-xs uppercase text-muted-foreground">
+                                            <tr>
+                                                <th className="px-4 py-3">Plan</th>
+                                                <th className="px-4 py-3">Status</th>
+                                                <th className="px-4 py-3">Cycle</th>
+                                                <th className="px-4 py-3">Subscribed</th>
+                                                <th className="px-4 py-3">Expired / Ended</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {data.subscriptionHistory.map((record) => (
+                                                <tr key={record.id} className="border-t border-border">
+                                                    <td className="px-4 py-3 font-medium text-foreground">
+                                                        {record.planName ?? '—'}
+                                                        {record.isCurrent && (
+                                                            <Badge variant="primary" className="ml-2">Current</Badge>
+                                                        )}
+                                                    </td>
+                                                    <td className="px-4 py-3">
+                                                        <Badge variant={statusTone(record.status)}>
+                                                            {record.status.replace(/_/g, ' ')}
+                                                        </Badge>
+                                                    </td>
+                                                    <td className="px-4 py-3 text-muted-foreground">
+                                                        {record.billingCycle.replace('_', ' ')}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-muted-foreground">
+                                                        {formatDate(record.startsAt)}
+                                                    </td>
+                                                    <td className="px-4 py-3 text-muted-foreground">
+                                                        {formatDate(record.endsAt)}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
                 </TabsContent>
 
                 {/* ------------------------------------------------------------------ */}
@@ -943,9 +1136,7 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                                 <CardDescription>
                                     {formatCyclePrice(priceForCycle(currentPlan, subscription?.billingCycle ?? 'monthly'), currentPlan.currency, subscription?.billingCycle ?? 'monthly')}
                                     {' · '}
-                                    {formatCapacity(currentPlan.maxBranches)} branches
-                                    {' · '}
-                                    {formatCapacity(currentPlan.maxEmployees)} employees
+                                    {formatCapacity(currentPlan.maxSeats)} active users
                                 </CardDescription>
                             </CardHeader>
                             {currentPlanFeatures.length > 0 && (
@@ -967,9 +1158,13 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                                     {data?.entitled ? 'Available plans' : 'Choose your plan'}
                                 </h2>
                                 <p className="text-sm text-muted-foreground">
-                                    {data?.entitled
-                                        ? 'Compare plans and switch when your needs change.'
-                                        : 'Select a plan to begin your subscription.'}
+                                    {isIncomplete
+                                        ? 'Your last checkout was not paid. Complete the payment for your previous plan or discard it and pick another.'
+                                        : isExpired
+                                            ? 'Your subscription has expired. Renew your previous plan or choose a new one to restore access.'
+                                            : data?.entitled
+                                                ? 'Compare plans and switch when your needs change.'
+                                                : 'Select a plan to begin your subscription.'}
                                 </p>
                             </div>
                             {!canManage && data?.entitled && (
@@ -992,6 +1187,8 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                                         key={plan.id}
                                         plan={plan}
                                         isCurrent={currentPlan?.id === plan.id}
+                                        isRenewable={(isExpired || isIncomplete) && currentPlan?.id === plan.id}
+                                        renewalLabel={isIncomplete ? 'Payment pending' : undefined}
                                         canManage={canManage || !data?.entitled}
                                         selectedCycle={selectedCycle}
                                         onCycleChange={(cycle) => setSelectedCycle(cycle as BillingCycle)}
@@ -1009,114 +1206,31 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                 <TabsContent value="usage" className="space-y-6">
                     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <StatCard
-                            title="Active branches"
-                            value={branchLimit === null ? String(activeBranches) : `${activeBranches} / ${branchLimit}`}
-                            icon={Building2}
-                            tone="success"
-                            description={branchLimit === null ? 'Unlimited allowed' : 'of your plan allowance'}
-                        />
-                        <StatCard
-                            title="Employee usage"
-                            value={String(totalEmployees)}
+                            title="Active users (seats)"
+                            value={seatLimit === null ? String(seatUsed) : `${seatUsed} / ${seatLimit}`}
                             icon={Users}
-                            tone="info"
-                            description="across active branches"
+                            tone={seatFull ? 'danger' : 'success'}
+                            description={
+                                seatLimit === null
+                                    ? 'Unlimited user accounts'
+                                    : seatFull
+                                        ? 'plan seat limit reached'
+                                        : 'active user accounts'
+                            }
                         />
                         <StatCard
-                            title="Employee capacity"
-                            value={capacityLimit === null ? 'Unlimited' : String(capacityLimit)}
-                            icon={Users}
-                            tone={capacityLimit !== null && totalEmployees >= capacityLimit ? 'danger' : 'info'}
-                            description={capacityLimit === null ? 'No limit on your plan' : 'allowed by your plan'}
-                        />
-                        <StatCard
-                            title="Remaining capacity"
-                            value={capacityLimit === null ? 'Unlimited' : String(Math.max(capacityLimit - totalEmployees, 0))}
+                            title="Remaining seats"
+                            value={seatLimit === null ? 'Unlimited' : String(Math.max(seatLimit - seatUsed, 0))}
                             icon={CheckCircle2}
-                            tone={capacityLimit !== null && totalEmployees >= capacityLimit ? 'danger' : 'success'}
-                            description="employees you can still assign"
+                            tone={seatLimit !== null && seatFull ? 'danger' : 'success'}
+                            description={
+                                seatLimit === null
+                                    ? 'No seat limit on your plan'
+                                    : 'user accounts you can still activate'
+                            }
                         />
                     </div>
 
-                    <section className="space-y-4">
-                        <div>
-                            <h2 className="text-lg font-semibold tracking-tight text-foreground">Usage by branch</h2>
-                            <p className="text-sm text-muted-foreground">
-                                Employee usage and capacity per branch.
-                            </p>
-                        </div>
-
-                        {branchUsage.length === 0 ? (
-                            <EmptyState
-                                icon={Building2}
-                                title="No branches yet"
-                                description="Create branches to see their usage and capacity here."
-                            />
-                        ) : (
-                            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                                {branchUsage.map((branch) => (
-                                    <BranchUsageCard
-                                        key={branch.id}
-                                        branch={branch}
-                                        suggestedMax={planBranchCapacity(currentPlan, branch.employeeCapacity)}
-                                        canManage={false}
-                                        branchLimitReached={branchLimitReached}
-                                        isActivating={false}
-                                        onActivate={() => undefined}
-                                        onIncreaseCapacity={() => undefined}
-                                    />
-                                ))}
-                            </div>
-                        )}
-                    </section>
-                </TabsContent>
-
-                {/* ------------------------------------------------------------------ */}
-                {/* BRANCHES                                                               */}
-                {/* ------------------------------------------------------------------ */}
-                <TabsContent value="branches" className="space-y-6">
-                    <section className="space-y-4">
-                        <div>
-                            <h2 className="text-lg font-semibold tracking-tight text-foreground">Branches</h2>
-                            <p className="text-sm text-muted-foreground">
-                                Activate branches, manage employee capacity and deactivate branches you no longer use.
-                            </p>
-                        </div>
-
-                        {branchUsage.length === 0 ? (
-                            <EmptyState
-                                icon={Building2}
-                                title="No branches yet"
-                                description="Create branches to see their subscription and capacity here."
-                            />
-                        ) : (
-                            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                                {branchUsage.map((branch) => (
-                                    <div key={branch.id} className="flex flex-col gap-2">
-                                        <BranchUsageCard
-                                            branch={branch}
-                                            suggestedMax={planBranchCapacity(currentPlan, branch.employeeCapacity)}
-                                            canManage={canManageBranch}
-                                            branchLimitReached={branchLimitReached}
-                                            isActivating={activateBranch.isPending && capacityBranch?.id === branch.id}
-                                            onActivate={() => handleActivate(branch)}
-                                            onIncreaseCapacity={() => handleIncreaseCapacity(branch)}
-                                        />
-                                        {branch.active && canManageBranch && (
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                disabled={busy}
-                                                onClick={() => setDeactivateTarget(branch)}
-                                            >
-                                                Deactivate
-                                            </Button>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </section>
                 </TabsContent>
 
                 {/* ------------------------------------------------------------------ */}
@@ -1223,11 +1337,24 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                 {/* INVOICES                                                               */}
                 {/* ------------------------------------------------------------------ */}
                 <TabsContent value="invoices" className="space-y-4">
-                    <div>
-                        <h2 className="text-lg font-semibold tracking-tight text-foreground">Invoices</h2>
-                        <p className="text-sm text-muted-foreground">
-                            Your billing history for the current subscription.
-                        </p>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <h2 className="text-lg font-semibold tracking-tight text-foreground">Invoices</h2>
+                            <p className="text-sm text-muted-foreground">
+                                Your billing history, including each invoice's subscription status and period dates.
+                            </p>
+                        </div>
+                        {canManage && (
+                            <Button
+                                variant="outline"
+                                loading={billingPortal.isPending}
+                                loadingLabel="Opening portal…"
+                                onClick={handleOpenBillingPortal}
+                            >
+                                <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                                Billing portal
+                            </Button>
+                        )}
                     </div>
                     <InvoiceHistoryTable
                         invoices={invoices.data?.data}
@@ -1241,24 +1368,12 @@ export default function SubscriptionDashboardPage(): JSX.Element {
             </Tabs>
 
             {/* Dialogs */}
-            <BranchCapacityDialog
-                open={capacityOpen}
-                branch={capacityBranch}
-                currentCapacity={capacityBranch?.employeeCapacity ?? planBranchCapacity(currentPlan, capacityBranch?.employeeCapacity ?? null)}
-                suggestedMax={currentPlan?.maxEmployees ?? null}
-                isPending={capacityBranch?.active ? updateCapacity.isPending : activateBranch.isPending}
-                onOpenChange={(next) => {
-                    setCapacityOpen(next);
-                    if (!next) setCapacityBranch(null);
-                }}
-                onConfirm={capacityBranch?.active ? handleCapacityConfirm : handleActivateConfirm}
-            />
-
             <UpgradePlanDialog
                 open={planDialogOpen}
                 summary={data ?? null}
                 targetPlan={targetPlan}
                 selectedCycle={selectedCycle}
+                estimate={planChangeEstimate.data ?? null}
                 isDowngrade={isDowngradeDirection(data ?? null, targetPlan)}
                 isPending={upgrade.isPending || downgrade.isPending}
                 onOpenChange={(next) => {
@@ -1268,10 +1383,22 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                 onConfirm={handleConfirmPlanChange}
             />
 
+            {/* Shown when a downgrade is rejected because the company has more
+                active user accounts than the target plan allows. */}
+            <DowngradeConflictDialog
+                open={downgradeConflict !== null}
+                used={downgradeConflict?.used ?? seatUsed}
+                cap={downgradeConflict?.cap ?? seatLimit}
+                onOpenChange={(next) => {
+                    if (!next) setDowngradeConflict(null);
+                }}
+            />
+
             <CheckoutDialog
                 open={checkoutOpen}
                 plan={checkoutPlan}
                 selectedCycle={checkoutCycle}
+                seatUsed={seatUsed}
                 isPending={checkout.isPending}
                 onCycleChange={setCheckoutCycle}
                 onOpenChange={(next) => {
@@ -1280,39 +1407,6 @@ export default function SubscriptionDashboardPage(): JSX.Element {
                 }}
                 onConfirm={handleCheckoutConfirm}
             />
-
-            {/* Deactivate confirmation */}
-            <AlertDialog.Root open={deactivateTarget !== null} onOpenChange={(next) => !next && setDeactivateTarget(null)}>
-                <AlertDialog.Portal>
-                    <AlertDialog.Overlay className="fixed inset-0 z-50 bg-black/40" />
-                    <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100vw-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-card p-6 shadow-lg focus:outline-none">
-                        <AlertDialog.Title className="text-lg font-semibold text-foreground">
-                            Deactivate {deactivateTarget?.name}?
-                        </AlertDialog.Title>
-                        <AlertDialog.Description className="mt-2 text-sm text-muted-foreground">
-                            This branch will no longer be available for scheduling. Employees assigned to it will
-                            be removed from the branch.
-                        </AlertDialog.Description>
-                        <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                            <AlertDialog.Cancel asChild>
-                                <Button variant="outline" disabled={deactivateBranch.isPending}>
-                                    Cancel
-                                </Button>
-                            </AlertDialog.Cancel>
-                            <AlertDialog.Action asChild>
-                                <Button
-                                    variant="destructive"
-                                    loading={deactivateBranch.isPending}
-                                    loadingLabel="Deactivating…"
-                                    onClick={handleDeactivateConfirm}
-                                >
-                                    Deactivate
-                                </Button>
-                            </AlertDialog.Action>
-                        </div>
-                    </AlertDialog.Content>
-                </AlertDialog.Portal>
-            </AlertDialog.Root>
 
             {/* Cancel subscription confirmation */}
             <AlertDialog.Root open={cancelOpen} onOpenChange={setCancelOpen}>

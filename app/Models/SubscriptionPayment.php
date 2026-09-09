@@ -24,6 +24,8 @@ class SubscriptionPayment extends Model
         'provider_reference',
         'stripe_payment_intent_id',
         'status',
+        'type',
+        'description',
         'amount_refunded',
         'paid_at',
         'refunded_at',
@@ -51,6 +53,22 @@ class SubscriptionPayment extends Model
     public function scopeSucceeded(Builder $query): Builder
     {
         return $query->where('status', 'succeeded');
+    }
+
+    /**
+     * Scope a query to only include plan-change (proration) charges.
+     */
+    public function scopeProration(Builder $query): Builder
+    {
+        return $query->where('type', 'proration');
+    }
+
+    /**
+     * Whether this row is a plan-change (proration) charge.
+     */
+    public function isProration(): bool
+    {
+        return $this->type === 'proration';
     }
 
     /**

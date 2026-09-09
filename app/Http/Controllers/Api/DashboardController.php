@@ -13,6 +13,7 @@ use App\Models\Roster;
 use App\Models\Shift;
 use App\Models\Subscription;
 use App\Models\SubscriptionPayment;
+use App\Models\User;
 use App\Traits\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -50,6 +51,11 @@ class DashboardController extends Controller
         $activeCompanies = Company::where('status', 'active')->count();
         $totalEmployees = Employee::count();
         $activeSubscriptions = Subscription::where('status', 'active')->count();
+        // Billable active-user seats across the whole platform (all active
+        // non-super-admin user accounts) — the per-seat billing aggregate.
+        $totalActiveSeats = User::query()
+            ->activeSeats()
+            ->count();
 
         $planDistribution = Plan::query()
             ->withCount(['subscriptions as active_subscriptions_count' => function ($query) {
@@ -70,6 +76,7 @@ class DashboardController extends Controller
                 'total_companies' => $totalCompanies,
                 'active_companies' => $activeCompanies,
                 'total_employees' => $totalEmployees,
+                'total_active_seats' => $totalActiveSeats,
                 'active_subscriptions' => $activeSubscriptions,
             ],
             'metrics' => [

@@ -7,6 +7,7 @@ use App\Models\Company;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\SubscriptionPayment;
+use App\Services\UsageService;
 use App\Traits\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,6 +16,10 @@ use Spatie\Activitylog\Models\Activity;
 class SuperAdminController extends Controller
 {
     use ApiResponse;
+
+    public function __construct(
+        private UsageService $usage,
+    ) {}
 
     /**
      * Global subscriptions list for the platform administration surface.
@@ -58,6 +63,12 @@ class SuperAdminController extends Controller
                 $company = $subscription->company;
                 $plan = $subscription->plan;
 
+                // Billable per-seat usage (one seat = one active non-super-admin
+                // user) resolved against the company's entitled plan so this
+                // platform view matches the company-facing console. Flat-rate
+                // plans keep `quantity` at 1; seat count is reporting only.
+                $seatUsage = $company ? $this->usage->seatUsage($company) : ['used' => 0, 'limit' => null];
+
                 return [
                     'id' => $subscription->id,
                     'company_id' => $subscription->company_id,
@@ -88,6 +99,8 @@ class SuperAdminController extends Controller
                     ] : null,
                     'plan_name' => $plan?->name,
                     'active_branches_count' => (int) $subscription->active_branches_count,
+                    'seats_used' => $seatUsage['used'],
+                    'seats_limit' => $seatUsage['limit'],
                     'created_at' => $subscription->created_at?->toIso8601String(),
                     'updated_at' => $subscription->updated_at?->toIso8601String(),
                 ];

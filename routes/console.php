@@ -1,6 +1,7 @@
 <?php
 
 use App\Console\Commands\EnforcePaymentLifecycle;
+use App\Console\Commands\ExpireSubscriptions;
 use App\Console\Commands\LockExpiredTrials;
 use App\Console\Commands\ReconcileIncompleteSubscriptions;
 use App\Console\Commands\SendSubscriptionRenewalReminders;
@@ -19,6 +20,9 @@ Schedule::command(SendSubscriptionRenewalReminders::class)->dailyAt('08:15')->wi
 Schedule::command(TransitionExpiredTrials::class)->dailyAt('08:20')->withoutOverlapping();
 Schedule::command(LockExpiredTrials::class)->dailyAt('08:30')->withoutOverlapping();
 Schedule::command(EnforcePaymentLifecycle::class)->dailyAt('08:45')->withoutOverlapping();
+// Safety net: mark paid subscriptions whose period has lapsed as `expired`
+// (locking the company) unless Stripe still reports the subscription live.
+Schedule::command(ExpireSubscriptions::class)->dailyAt('08:40')->withoutOverlapping();
 // Safety net: expire stale `incomplete` rows left behind by abandoned checkouts
 // (the frontend confirms legitimate completions via checkout/confirm).
 Schedule::command(ReconcileIncompleteSubscriptions::class)->dailyAt('08:50')->withoutOverlapping();

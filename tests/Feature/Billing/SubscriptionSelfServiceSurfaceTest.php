@@ -5,6 +5,7 @@ namespace Tests\Feature\Billing;
 use App\Billing\BillingProvider;
 use App\Models\Branch;
 use App\Models\Company;
+use App\Models\Employee;
 use App\Models\Plan;
 use App\Models\Subscription;
 use App\Models\SubscriptionPayment;
@@ -101,6 +102,23 @@ class SubscriptionSelfServiceSurfaceTest extends TestCase
                 ];
             }
 
+            public function startOneOffCheckout(
+                User $user,
+                float $amount,
+                string $currency,
+                string $description,
+                string $subscriptionId,
+                string $planId,
+                string $cycle,
+                ?string $successUrl,
+                ?string $cancelUrl,
+            ): array {
+                return [
+                    'url' => 'https://checkout.stripe.test/one-off/'.$subscriptionId,
+                    'session_id' => 'cs_test_oneoff_'.$subscriptionId,
+                ];
+            }
+
             public function cancel(User $user, Subscription $subscription, bool $immediately = false): void
             {
                 // no-op
@@ -111,9 +129,10 @@ class SubscriptionSelfServiceSurfaceTest extends TestCase
                 // no-op
             }
 
-            public function swap(User $user, Subscription $subscription, Plan $plan, string $cycle): void
+            public function swap(User $user, Subscription $subscription, Plan $plan, string $cycle, array $options = []): ?array
             {
                 // no-op
+                return null;
             }
 
             public function billingPortal(User $user, ?string $returnUrl = null): string
@@ -151,6 +170,32 @@ class SubscriptionSelfServiceSurfaceTest extends TestCase
     protected function activateBranchViaApi(Branch $branch): void
     {
         $this->postJson("/api/v1/branches/{$branch->id}/activate")->assertOk();
+    }
+
+    /**
+     * Creates active member accounts (each consuming a seat) assigned to a
+     * branch, plus their employee rows. Every linked user must have the
+     * company's `company_id` set so it is counted by the seat-based guard —
+     * `Employee::factory()` alone would create users with `company_id = null`,
+     * which are not active seats.
+     */
+    protected function createActiveMemberSeats(Company $company, Branch $branch, int $count): void
+    {
+        $users = User::factory()->count($count)->create([
+            'company_id' => $company->id,
+            'status' => 'active',
+        ]);
+
+        foreach ($users as $user) {
+            $user->assignRole('employee');
+
+            Employee::factory()->create([
+                'company_id' => $company->id,
+                'user_id' => $user->id,
+                'branch_id' => $branch->id,
+                'status' => 'active',
+            ]);
+        }
     }
 
     /*
@@ -363,6 +408,50 @@ class SubscriptionSelfServiceSurfaceTest extends TestCase
         $this->getJson('/api/v1/subscription/payments')->assertNotFound();
     }
 
+    public function test_self_service_payments_still_load_after_expiry(): void
+    {
+        $company = Company::factory()->create();
+        $this->actingAsCompanyAdmin($company);
+        $subscription = Subscription::factory()->create([
+            'company_id' => $company->id,
+            'status' => 'expired',
+            'starts_at' => now()->subMonths(2),
+            'ends_at' => now()->subMonth(),
+        ]);
+        SubscriptionPayment::factory()->count(2)->create(['subscription_id' => $subscription->id]);
+
+        $this->getJson('/api/v1/subscription/payments')
+            ->assertOk()
+            ->assertJsonCount(2, 'data.data')
+            ->assertJsonPath('data.data.0.subscription.status', 'expired')
+            ->assertJsonPath('data.data.0.subscription.starts_at', $subscription->starts_at->toIso8601String())
+            ->assertJsonPath('data.data.0.subscription.ends_at', $subscription->ends_at->toIso8601String());
+    }
+
+    public function test_self_service_payments_span_previous_subscriptions(): void
+    {
+        $company = Company::factory()->create();
+        $this->actingAsCompanyAdmin($company);
+        $expired = Subscription::factory()->create([
+            'company_id' => $company->id,
+            'status' => 'expired',
+            'starts_at' => now()->subMonths(3),
+            'ends_at' => now()->subMonths(2),
+        ]);
+        $current = Subscription::factory()->create([
+            'company_id' => $company->id,
+            'status' => 'active',
+            'starts_at' => now()->subMonth(),
+            'ends_at' => now()->addMonth(),
+        ]);
+        SubscriptionPayment::factory()->create(['subscription_id' => $expired->id]);
+        SubscriptionPayment::factory()->create(['subscription_id' => $current->id]);
+
+        $this->getJson('/api/v1/subscription/payments')
+            ->assertOk()
+            ->assertJsonCount(2, 'data.data');
+    }
+
     public function test_employee_cannot_list_self_service_payments(): void
     {
         $company = Company::factory()->create();
@@ -375,6 +464,148 @@ class SubscriptionSelfServiceSurfaceTest extends TestCase
         $this->actingAsEmployee($company);
 
         $this->getJson('/api/v1/subscription/payments')->assertForbidden();
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Task 3 — subscribing below current active users is blocked
+    |--------------------------------------------------------------------------
+    |
+    | A company that is still on trial (or locked after an expired trial) has
+    | no entitled subscription, so the old pre-flight only validated plan
+    | changes when an entitled subscription existed. The shared
+    | `assertCanSubscribeToPlan` guard now applies the same branch / seat
+    | allowance rules to every subscription entry point — including a trial
+    | company subscribing to a plan with fewer seats than its active users.
+    */
+
+    public function test_trial_company_cannot_checkout_plan_below_active_users(): void
+    {
+        $this->fakeBillingProvider();
+
+        $company = Company::factory()->create(); // active trial by default
+        $this->actingAsCompanyAdmin($company);
+
+        $target = Plan::factory()->create([
+            'max_branches' => 10,
+            'max_employees' => 2,
+            'stripe_monthly_price_id' => 'price_trial_target_monthly',
+        ]);
+
+        // The acting admin + 3 active member accounts = 4 active seats, which
+        // exceeds the target plan's 2-seat allowance. The branch only needs to
+        // exist (as a foreign key for the employee rows) — activation requires
+        // an entitled subscription a trial company does not have yet.
+        $branch = Branch::factory()->create(['company_id' => $company->id]);
+        $this->createActiveMemberSeats($company, $branch, 3);
+
+        $this->postJson('/api/v1/subscription/checkout', [
+            'plan_id' => $target->id,
+            'billing_cycle' => 'monthly',
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('code', 'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED')
+            ->assertJsonPath('errors.used', 4)
+            ->assertJsonPath('errors.capacity', 2);
+
+        // No checkout session may have been created for the blocked plan.
+        $this->assertDatabaseMissing('subscriptions', [
+            'company_id' => $company->id,
+            'plan_id' => $target->id,
+        ]);
+    }
+
+    public function test_locked_company_cannot_checkout_plan_below_active_users(): void
+    {
+        $this->fakeBillingProvider();
+
+        // An expired trial locks the company; the billing surface stays
+        // reachable, but the reactivation plan must still fit current usage.
+        $company = Company::factory()->trialExpired()->locked()->create();
+        $this->actingAsCompanyAdmin($company);
+
+        $target = Plan::factory()->create([
+            'max_branches' => 10,
+            'max_employees' => 1,
+            'stripe_monthly_price_id' => 'price_locked_target_monthly',
+        ]);
+
+        $branch = Branch::factory()->create(['company_id' => $company->id]);
+        $this->createActiveMemberSeats($company, $branch, 2);
+
+        // 3 active seats (admin + 2 members) > 1 seat on the target plan.
+        $this->postJson('/api/v1/subscription/checkout', [
+            'plan_id' => $target->id,
+            'billing_cycle' => 'monthly',
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('code', 'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED')
+            ->assertJsonPath('errors.used', 3)
+            ->assertJsonPath('errors.capacity', 1);
+    }
+
+    public function test_trial_company_can_checkout_plan_that_fits_active_users(): void
+    {
+        $this->fakeBillingProvider();
+
+        $company = Company::factory()->create();
+        $this->actingAsCompanyAdmin($company);
+
+        $target = Plan::factory()->create([
+            'max_branches' => 10,
+            'max_employees' => 10,
+            'stripe_monthly_price_id' => 'price_trial_fit_monthly',
+        ]);
+
+        $branch = Branch::factory()->create(['company_id' => $company->id]);
+        $this->createActiveMemberSeats($company, $branch, 3);
+
+        // 4 active seats fit within the 10-seat target — checkout proceeds.
+        $response = $this->postJson('/api/v1/subscription/checkout', [
+            'plan_id' => $target->id,
+            'billing_cycle' => 'monthly',
+        ])
+            ->assertCreated()
+            ->assertJsonPath('success', true);
+
+        $response->assertJsonPath(
+            'data.checkout_session_id',
+            'cs_test_'. $response->json('data.subscription.id')
+        );
+    }
+
+    public function test_direct_subscribe_is_blocked_when_plan_below_active_users(): void
+    {
+        $this->fakeBillingProvider();
+
+        $company = Company::factory()->create();
+        $this->actingAsCompanyAdmin($company);
+
+        $target = Plan::factory()->create([
+            'max_branches' => 10,
+            'max_employees' => 2,
+        ]);
+
+        $branch = Branch::factory()->create(['company_id' => $company->id]);
+        $this->createActiveMemberSeats($company, $branch, 3);
+
+        // The explicit-company platform surface must apply the same guard.
+        $this->postJson("/api/v1/companies/{$company->id}/subscriptions", [
+            'plan_id' => $target->id,
+            'billing_cycle' => 'monthly',
+        ])
+            ->assertStatus(422)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('code', 'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED')
+            ->assertJsonPath('errors.used', 4)
+            ->assertJsonPath('errors.capacity', 2);
+
+        $this->assertDatabaseMissing('subscriptions', [
+            'company_id' => $company->id,
+            'plan_id' => $target->id,
+        ]);
     }
 
     /*
@@ -414,5 +645,154 @@ class SubscriptionSelfServiceSurfaceTest extends TestCase
             ->assertStatus(423)
             ->assertJsonPath('code', 'SUBSCRIPTION_REQUIRED')
             ->assertJsonPath('data.is_locked', true);
+    }
+
+    public function test_locked_company_can_still_reach_the_billing_portal(): void
+    {
+        $this->fakeBillingProvider();
+
+        $company = Company::factory()->trialExpired()->locked()->create();
+        $this->actingAsCompanyAdmin($company);
+        Subscription::factory()->create([
+            'company_id' => $company->id,
+            'status' => 'expired',
+            'starts_at' => now()->subMonths(2),
+            'ends_at' => now()->subMonth(),
+        ]);
+
+        $this->postJson('/api/v1/subscription/billing-portal')
+            ->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.url', 'https://billing.stripe.test/portal/session');
+    }
+
+    public function test_expired_company_can_renew_the_same_plan_via_checkout(): void
+    {
+        $this->fakeBillingProvider();
+
+        $company = Company::factory()->create();
+        $this->actingAsCompanyAdmin($company);
+        $plan = Plan::factory()->create([
+            'stripe_monthly_price_id' => 'price_renew_monthly',
+        ]);
+        $expired = Subscription::factory()->create([
+            'company_id' => $company->id,
+            'plan_id' => $plan->id,
+            'status' => 'expired',
+            'billing_cycle' => 'monthly',
+            'starts_at' => now()->subMonths(2),
+            'ends_at' => now()->subMonth(),
+        ]);
+
+        // The renewal of the previously-subscribed (now expired) plan is a
+        // fresh checkout — it must be accepted, not blocked as a "current plan".
+        $response = $this->postJson('/api/v1/subscription/checkout', [
+            'plan_id' => $plan->id,
+            'billing_cycle' => 'monthly',
+        ])->assertCreated();
+
+        $newSubscriptionId = $response->json('data.subscription.id');
+        $this->assertNotSame((string) $expired->id, (string) $newSubscriptionId);
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $newSubscriptionId,
+            'company_id' => $company->id,
+            'plan_id' => $plan->id,
+            'status' => 'incomplete',
+        ]);
+    }
+
+    public function test_company_admin_can_retry_an_incomplete_checkout(): void
+    {
+        $this->fakeBillingProvider();
+
+        $company = Company::factory()->create();
+        $this->actingAsCompanyAdmin($company);
+        $plan = Plan::factory()->create([
+            'stripe_monthly_price_id' => 'price_retry_monthly',
+        ]);
+        $pending = Subscription::factory()->incomplete()->create([
+            'company_id' => $company->id,
+            'plan_id' => $plan->id,
+            'billing_cycle' => 'monthly',
+        ]);
+
+        $response = $this->postJson('/api/v1/subscription/checkout/retry')->assertCreated();
+
+        // The stale attempt is closed and a brand-new incomplete row (with a
+        // fresh Stripe session) is opened for the SAME plan and cycle.
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $pending->id,
+            'status' => 'expired',
+        ]);
+
+        $newSubscriptionId = $response->json('data.subscription.id');
+        $this->assertNotSame((string) $pending->id, (string) $newSubscriptionId);
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $newSubscriptionId,
+            'company_id' => $company->id,
+            'plan_id' => $plan->id,
+            'status' => 'incomplete',
+            'billing_cycle' => 'monthly',
+        ]);
+        $this->assertSame(
+            'https://checkout.stripe.test/session/'.$newSubscriptionId,
+            $response->json('data.checkout_url'),
+        );
+    }
+
+    public function test_retry_returns_422_when_no_incomplete_checkout_exists(): void
+    {
+        $this->fakeBillingProvider();
+
+        $company = Company::factory()->create();
+        $this->actingAsCompanyAdmin($company);
+
+        $this->postJson('/api/v1/subscription/checkout/retry')
+            ->assertStatus(422)
+            ->assertJsonPath('success', false);
+    }
+
+    public function test_company_admin_can_discard_an_incomplete_checkout(): void
+    {
+        $this->fakeBillingProvider();
+
+        $company = Company::factory()->create();
+        $this->actingAsCompanyAdmin($company);
+        $plan = Plan::factory()->create([
+            'stripe_monthly_price_id' => 'price_discard_monthly',
+        ]);
+        $pending = Subscription::factory()->incomplete()->create([
+            'company_id' => $company->id,
+            'plan_id' => $plan->id,
+            'billing_cycle' => 'monthly',
+        ]);
+
+        $this->postJson('/api/v1/subscription/checkout/discard')
+            ->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.subscription.status', 'expired');
+
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $pending->id,
+            'status' => 'expired',
+        ]);
+    }
+
+    public function test_employee_cannot_retry_or_discard_a_checkout(): void
+    {
+        $this->fakeBillingProvider();
+
+        $company = Company::factory()->create();
+        $this->actingAsEmployee($company);
+        $plan = Plan::factory()->create([
+            'stripe_monthly_price_id' => 'price_employee_monthly',
+        ]);
+        Subscription::factory()->incomplete()->create([
+            'company_id' => $company->id,
+            'plan_id' => $plan->id,
+        ]);
+
+        $this->postJson('/api/v1/subscription/checkout/retry')->assertForbidden();
+        $this->postJson('/api/v1/subscription/checkout/discard')->assertForbidden();
     }
 }

@@ -6,6 +6,7 @@ import {
     CalendarCheck2,
     CreditCard,
     TrendingUp,
+    UserCheck,
     Users,
     Wallet,
 } from 'lucide-react';
@@ -175,7 +176,15 @@ function PlatformOverview(): JSX.Element {
                     value={(data?.stats.totalEmployees ?? 0).toLocaleString('en-AU')}
                     icon={Users}
                     tone="info"
-                    description="Across all companies"
+                    description="Staff records across companies (not seats)"
+                    isLoading={isLoading}
+                />
+                <StatCard
+                    title="Seats under management"
+                    value={(data?.stats.totalActiveSeats ?? 0).toLocaleString('en-AU')}
+                    icon={UserCheck}
+                    tone="primary"
+                    description="Active user accounts (seats)"
                     isLoading={isLoading}
                 />
                 <StatCard

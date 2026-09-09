@@ -3,6 +3,7 @@
 namespace App\Domains\Auth\Actions;
 
 use App\Models\User;
+use App\Services\SeatCapacityService;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
@@ -11,6 +12,10 @@ use Illuminate\Validation\ValidationException;
 
 class ResetPasswordAction
 {
+    public function __construct(
+        private SeatCapacityService $seats,
+    ) {}
+
     /**
      * Reset the user's password using a valid reset token.
      *
@@ -41,6 +46,15 @@ class ResetPasswordAction
                 // otherwise LoginAction would keep rejecting them as inactive and
                 // an invited admin/scheduler could never sign in at all.
                 if ($user->status === 'invited') {
+                    // Promoting an invited account to `active` consumes a seat,
+                    // so it must pass the per-seat capacity guard first. The user
+                    // is excluded so a re-set password cannot self-block.
+                    $company = $user->company;
+
+                    if ($company !== null) {
+                        $this->seats->assertCanActivateUser($company, $user);
+                    }
+
                     $attributes['status'] = 'active';
 
                     if ($user->email_verified_at === null) {
@@ -51,6 +65,16 @@ class ResetPasswordAction
 
                 $user->forceFill($attributes)->save();
 
+                // When an account created `invited` activates (the invite was
+                // accepted by choosing a password) any linked directory row that
+                // was held as `pending` because the plan was full at invite time
+                // must now become `active` — the account is sign-in ready and a
+                // seat was just consumed, so leaving it pending would keep the
+                // person unschedulable forever. Rows created through other
+                // journeys (already active/inactive) are left untouched.
+                if ($user->status === 'active' && $user->employee !== null && $user->employee->status === 'pending') {
+                    $user->employee->update(['status' => 'active']);
+                }
 
                 // Revoke all existing access tokens so old sessions can't be reused.
                 $user->tokens()->delete();

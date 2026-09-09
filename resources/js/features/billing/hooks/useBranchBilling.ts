@@ -27,6 +27,7 @@ interface BranchMutationDto {
     branch: unknown;
     branch_subscription: BranchSubscriptionDto;
     usage: {
+        seats: { used: number; limit: number | null };
         branches: { used: number; limit: number | null };
         branch_usage: Array<{
             branch_id?: number;
@@ -46,6 +47,10 @@ const number = (value: number | string | null | undefined): number => Number(val
 /** Map the `usage` block returned by the branch mutation endpoints. */
 function mapUsage(dto: BranchMutationDto['usage']): SubscriptionUsage {
     return {
+        seats: {
+            used: number(dto.seats?.used),
+            limit: dto.seats?.limit ?? null,
+        },
         branches: {
             used: number(dto.branches.used),
             limit: dto.branches.limit,

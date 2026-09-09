@@ -94,4 +94,16 @@ class SubscriptionFactory extends Factory
             'ends_at' => now()->subDay(),
         ]);
     }
+
+    /**
+     * Indicate that a Stripe Checkout session was started but never paid —
+     * the row awaits confirmation or reconciliation.
+     */
+    public function incomplete(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'status' => 'incomplete',
+            'checkout_session_id' => 'cs_test_pending_'.fake()->unique()->numberBetween(1000, 9999),
+        ]);
+    }
 }

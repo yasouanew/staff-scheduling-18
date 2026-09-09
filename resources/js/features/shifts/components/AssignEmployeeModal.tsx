@@ -42,12 +42,11 @@ export function AssignEmployeeModal({
         }
     }, [open, shift?.employeeId]);
 
-    const availableEmployees = useMemo(
+    const candidateEmployees = useMemo(
         () =>
             employees.filter(
                 (employee) =>
-                    employee.status === 'active' &&
-                    (!shift?.branchId || employee.branchId === null || employee.branchId === shift.branchId),
+                    !shift?.branchId || employee.branchId === null || employee.branchId === shift.branchId,
             ),
         [employees, shift?.branchId],
     );
@@ -55,13 +54,13 @@ export function AssignEmployeeModal({
         () =>
             shift
                 ? findEmployeeConflicts({
-                      shifts: existingShifts,
-                      employeeId: employeeId || null,
-                      date: shift.date,
-                      startTime: shift.startTime,
-                      endTime: shift.endTime,
-                      excludedShiftId: shift.id,
-                  })
+                    shifts: existingShifts,
+                    employeeId: employeeId || null,
+                    date: shift.date,
+                    startTime: shift.startTime,
+                    endTime: shift.endTime,
+                    excludedShiftId: shift.id,
+                })
                 : [],
         [employeeId, existingShifts, shift],
     );
@@ -70,7 +69,10 @@ export function AssignEmployeeModal({
         return null;
     }
 
-    const selectedEmployee = availableEmployees.find((employee) => employee.id === employeeId);
+    const selectedEmployee = candidateEmployees.find((employee) => employee.id === employeeId);
+    // A shift may already hold a deactivated employee; keep them visible but
+    // never allow assigning to a non-active account.
+    const canAssign = selectedEmployee?.status === 'active';
 
     return (
         <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -117,20 +119,25 @@ export function AssignEmployeeModal({
                                 aria-describedby="assign-employee-help"
                             >
                                 <option value="">Select an available employee…</option>
-                                {availableEmployees.map((employee) => (
-                                    <option key={employee.id} value={employee.id}>
+                                {candidateEmployees.map((employee) => (
+                                    <option
+                                        key={employee.id}
+                                        value={employee.id}
+                                        disabled={employee.status !== 'active'}
+                                    >
                                         {employee.name} · {employee.position}
+                                        {employee.status !== 'active' ? ` (${employee.status})` : ''}
                                     </option>
                                 ))}
                             </select>
                             <p id="assign-employee-help" className="text-xs text-muted-foreground">
-                                Active employees from this branch are shown first.
+                                Only active employees can be assigned; other statuses are shown for reference.
                             </p>
                         </div>
 
-                        {availableEmployees.length === 0 ? (
+                        {candidateEmployees.length === 0 ? (
                             <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
-                                No active employees are available for this branch. Add or reactivate an employee, then
+                                No employees are available for this branch. Add or reactivate an employee, then
                                 return to assign this shift.
                             </div>
                         ) : null}
@@ -181,7 +188,7 @@ export function AssignEmployeeModal({
                         </Dialog.Close>
                         <button
                             type="button"
-                            disabled={!employeeId || isAssigning}
+                            disabled={!canAssign || isAssigning}
                             onClick={() => void onAssign(employeeId)}
                             className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
                         >

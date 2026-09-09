@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { StatusBadge } from '@/Components/common/StatusBadge';
 import { useBranchOptions, useBranches } from '@/features/branches/hooks/useBranches';
 import { useEmployees } from '@/features/employees/hooks/useEmployees';
 import { cn } from '@/lib/utils';
@@ -143,6 +144,10 @@ function EmployeeListItem({
     onUpdateBreakStatus,
 }: EmployeeListItemProps): JSX.Element {
     const isSelected = Boolean(assignment);
+    // Pending, inactive and terminated employees stay visible so the manager can
+    // see who exists, but they cannot be rostered — only `active` staff are
+    // selectable (the backend enforces the same rule).
+    const isSelectable = employee.status === 'active';
     // Untouched rows show (and submit) the employee's own branch's default for
     // the date — never the selected branch's policy.
     const defaults = resolveBreakDefaults(employee.branchId);
@@ -154,20 +159,23 @@ function EmployeeListItem({
             className={cn(
                 'rounded-lg border p-2.5 transition-colors',
                 isSelected ? 'border-primary bg-primary/5' : 'border-border',
+                !isSelectable ? 'opacity-60' : '',
             )}
         >
             <div className="flex items-center gap-3">
                 <input
                     type="checkbox"
                     checked={isSelected}
+                    disabled={!isSelectable}
                     onChange={() => onToggle(employee.id)}
                     aria-label={`Roster ${employee.name}`}
-                    className="h-4 w-4 shrink-0 rounded border-input text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    className="h-4 w-4 shrink-0 rounded border-input text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-40"
                 />
 
                 <div className="min-w-0 flex-1">
                     <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
                         <span className="truncate">{employee.name}</span>
+                        {!isSelectable ? <StatusBadge status={employee.status} /> : null}
                         <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
                             <Building2 className="h-3 w-3" aria-hidden="true" />
                             {employee.branchName ?? 'Unassigned Branch'}
@@ -487,15 +495,12 @@ export function AddShiftWizard({
         return term ? all.filter((branch) => branch.name.toLowerCase().includes(term)) : all;
     }, [branchesQuery.data, branchSearch]);
 
-    const activeEmployees = useMemo(
-        () => (employeesQuery.data ?? []).filter((employee) => employee.status === 'active'),
-        [employeesQuery.data],
-    );
+    const allEmployees = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
 
     /** Employees already rostered at the selected branch (left column). */
     const branchEmployees = useMemo(() => {
         const term = branchEmployeeSearch.trim().toLowerCase();
-        const scoped = activeEmployees.filter((employee) => employee.branchId === branchId);
+        const scoped = allEmployees.filter((employee) => employee.branchId === branchId);
         return term
             ? scoped.filter(
                 (employee) =>
@@ -503,12 +508,12 @@ export function AddShiftWizard({
                     employee.position.toLowerCase().includes(term),
             )
             : scoped;
-    }, [activeEmployees, branchEmployeeSearch, branchId]);
+    }, [allEmployees, branchEmployeeSearch, branchId]);
 
-    /** Every other active employee — other branches or no branch at all (right column). */
+    /** Every other employee — other branches or no branch at all (right column). */
     const otherEmployees = useMemo(() => {
         const term = otherEmployeeSearch.trim().toLowerCase();
-        const scoped = activeEmployees.filter((employee) => employee.branchId !== branchId);
+        const scoped = allEmployees.filter((employee) => employee.branchId !== branchId);
         return term
             ? scoped.filter(
                 (employee) =>
@@ -516,7 +521,7 @@ export function AddShiftWizard({
                     employee.position.toLowerCase().includes(term),
             )
             : scoped;
-    }, [activeEmployees, otherEmployeeSearch, branchId]);
+    }, [allEmployees, otherEmployeeSearch, branchId]);
 
     /**
      * Publication state of the roster week these shifts will join, or `null` when
@@ -615,7 +620,7 @@ export function AddShiftWizard({
         // selected branch's. Employees without a branch fall back to the
         // selected branch, since that is the branch their shift is created for.
         const employeeBranchIds = new Map<string, string | null>(
-            activeEmployees.map((employee) => [employee.id, employee.branchId]),
+            allEmployees.map((employee) => [employee.id, employee.branchId]),
         );
 
         const finalize = (assignment: DraftAssignment): FinalizedAssignment => {

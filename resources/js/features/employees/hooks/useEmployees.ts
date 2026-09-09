@@ -12,6 +12,7 @@ import {
     type ApiSuccessResponse,
     type PaginatedCollection,
 } from '@/lib/api-client';
+import { SUBSCRIPTION_KEYS } from '@/features/billing/hooks/useSubscription';
 import {
     NO_DEPARTMENT_LABEL,
     type CreateEmployeeInput,
@@ -39,6 +40,27 @@ import {
  * mapped into the app's stable {@link Employee} domain type before they ever
  * reach the presentation layer.
  */
+
+/**
+ * Refresh the live active-user seat usage cache after a seat-affecting employee
+ * mutation.
+ *
+ * A seat is one *active user account* in the company (see the per-seat billing
+ * definition). Adding a member who becomes active, re-activating a deactivated
+ * member, or deactivating/revoking one all change that count. The seat-usage
+ * badge on the directory reads the billing usage query
+ * (`SUBSCRIPTION_KEYS.usage`, exposed through `useSeatCapacity`), so those
+ * mutations must invalidate it — otherwise the badge keeps showing a stale
+ * "used of limit" until a manual reload.
+ *
+ * Invalidating the key also lets the next capacity pre-flight
+ * (`seatCapacity.isFull`) and the Add/Edit seat warnings read fresh numbers the
+ * moment the mutation completes. This helper is a safe no-op for roles that
+ * cannot read billing usage (the query never mounts for them).
+ */
+function refreshSeatUsage(queryClient: ReturnType<typeof useQueryClient>): void {
+    void queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.usage });
+}
 
 /** Query cache key namespace for employee data. */
 export const EMPLOYEES_QUERY_KEY = ['employees'] as const;
@@ -313,6 +335,9 @@ async function updateEmployee({
         {
             first_name: input.firstName.trim(),
             last_name: input.lastName.trim(),
+            // Applied to the linked `users` row by `EmployeeService::update()`;
+            // the employee profile itself has no role column.
+            role: input.role,
             department_id: input.departmentId ? Number(input.departmentId) : null,
             position_id: input.positionId ? Number(input.positionId) : null,
             branch_id: input.branchId ? Number(input.branchId) : null,
@@ -455,6 +480,10 @@ export function useCreateEmployee(): UseMutationResult<Employee, Error, CreateEm
         mutationFn: createEmployee,
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: EMPLOYEES_KEYS.all });
+            // The new member is created `pending` with an outstanding invitation
+            // (no seat yet) — refresh the seat count so the badge and capacity
+            // pre-flights read the authoritative value.
+            refreshSeatUsage(queryClient);
         },
     });
 }
@@ -478,6 +507,13 @@ export function useUpdateEmployee(): UseMutationResult<Employee, Error, UpdateEm
         onSuccess: (employee) => {
             queryClient.setQueryData(EMPLOYEES_KEYS.detail(employee.id), employee);
             void queryClient.invalidateQueries({ queryKey: EMPLOYEES_KEYS.all });
+            // A status save can move a real (accepted) member onto `active`
+            // (seat consumed) or off it (seat freed via
+            // `EmployeeService::syncAccountAccess()`); hand-flipping a member
+            // whose invitation is still outstanding is refused with
+            // INVITATION_PENDING. Refresh the seat count so the badge reflects
+            // the transition.
+            refreshSeatUsage(queryClient);
         },
     });
 }
@@ -532,37 +568,45 @@ export function useSendInvitation(): UseMutationResult<
         mutationFn: sendInvitation,
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: EMPLOYEES_KEYS.all });
+            // (Re)sending an invitation keeps the member `pending` (no seat);
+            // they take a seat only when they accept and set a password —
+            // refresh the seat count so the badge stays authoritative.
+            refreshSeatUsage(queryClient);
         },
     });
 }
 
-/**
- * DELETE /api/v1/employees/{employee}/invitation — makes an outstanding
- * invitation inert.
- *
- * The backend clears every secret (web token, mobile code, setup token) so any
- * previously emailed link or code stops working, while the ledger row itself is
- * kept for the audit trail. Returns 404 when there is no invitation to revoke.
- */
-async function revokeInvitation(employeeId: string): Promise<void> {
-    await apiClient.delete(`/employees/${employeeId}/invitation`);
-}
+// Revoke invite feature disabled.
+// /**
+//  * DELETE /api/v1/employees/{employee}/invitation — makes an outstanding
+//  * invitation inert.
+//  *
+//  * The backend clears every secret (web token, mobile code, setup token) so any
+//  * previously emailed link or code stops working, while the ledger row itself is
+//  * kept for the audit trail. Returns 404 when there is no invitation to revoke.
+//  */
+// async function revokeInvitation(employeeId: string): Promise<void> {
+//     await apiClient.delete(`/employees/${employeeId}/invitation`);
+// }
 
-/**
- * Revokes one employee's outstanding invitation.
- *
- * The directory cache is invalidated on success because revoking clears the
- * invitation state, which the row menu reads to decide between "Send invite",
- * "Resend invite" and "Revoke invite".
- */
-export function useRevokeInvitation(): UseMutationResult<void, Error, string> {
-    const queryClient = useQueryClient();
+// /**
+//  * Revokes one employee's outstanding invitation.
+//  *
+//  * The directory cache is invalidated on success because revoking clears the
+//  * invitation state, which the row menu reads to decide between "Send invite",
+//  * "Resend invite" and "Revoke invite".
+//  */
+// export function useRevokeInvitation(): UseMutationResult<void, Error, string> {
+//     const queryClient = useQueryClient();
 
-    return useMutation<void, Error, string>({
-        mutationFn: revokeInvitation,
-        onSuccess: () => {
-            void queryClient.invalidateQueries({ queryKey: EMPLOYEES_KEYS.all });
-        },
-    });
-}
+//     return useMutation<void, Error, string>({
+//         mutationFn: revokeInvitation,
+//         onSuccess: () => {
+//             void queryClient.invalidateQueries({ queryKey: EMPLOYEES_KEYS.all });
+//             // Revoking can flip an active seat holder back to a non-seat state —
+//             // refresh the seat count so the badge reflects the freed seat.
+//             refreshSeatUsage(queryClient);
+//         },
+//     });
+// }
 

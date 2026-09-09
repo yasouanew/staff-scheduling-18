@@ -6,6 +6,8 @@ export interface BillingPlan {
     priceSixMonthly: number | null;
     priceYearly: number;
     maxEmployees: number | null;
+    /** `null` means unlimited active-user seats (alias of {@link maxEmployees}). */
+    maxSeats: number | null;
     maxBranches: number | null;
     features: string[];
     isActive: boolean;
@@ -45,6 +47,15 @@ export interface BillingPayment {
     refundedAt: string | null;
     isRefundable: boolean;
     isRefunded: boolean;
+    /** The owning subscription's state (status + period dates) for the invoices table. */
+    subscription?: {
+        id: string;
+        status: string;
+        billingCycle: 'monthly' | 'six_month' | 'yearly';
+        startsAt: string | null;
+        endsAt: string | null;
+        cancelledAt: string | null;
+    } | null;
 }
 
 export interface BillingPage<T> {

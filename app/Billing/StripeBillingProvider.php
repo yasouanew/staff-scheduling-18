@@ -30,6 +30,50 @@ class StripeBillingProvider implements BillingProvider
         };
     }
 
+    public function startOneOffCheckout(
+        User $user,
+        float $amount,
+        string $currency,
+        string $description,
+        string $subscriptionId,
+        string $planId,
+        string $cycle,
+        ?string $successUrl,
+        ?string $cancelUrl,
+    ): array {
+        $user->createOrGetStripeCustomer();
+
+        $metadata = [
+            'purpose' => 'plan_change',
+            'local_subscription_id' => $subscriptionId,
+            'plan_id' => $planId,
+            'billing_cycle' => $cycle,
+        ];
+
+        $session = Cashier::stripe()->checkout->sessions->create([
+            'customer' => $user->stripe_id,
+            'mode' => 'payment',
+            'line_items' => [[
+                'quantity' => 1,
+                'price_data' => [
+                    'currency' => strtolower($currency),
+                    'unit_amount' => (int) round($amount * 100),
+                    'product_data' => ['name' => $description],
+                ],
+            ]],
+            'success_url' => $successUrl,
+            'cancel_url' => $cancelUrl,
+            'client_reference_id' => $subscriptionId,
+            'metadata' => $metadata,
+            'payment_intent_data' => ['metadata' => $metadata],
+        ]);
+
+        return [
+            'url' => $session->url,
+            'session_id' => $session->id,
+        ];
+    }
+
     public function startCheckout(
         User $user,
         Plan $plan,
@@ -133,12 +177,12 @@ class StripeBillingProvider implements BillingProvider
         );
     }
 
-    public function swap(User $user, Subscription $subscription, Plan $plan, string $cycle): void
+    public function swap(User $user, Subscription $subscription, Plan $plan, string $cycle, array $options = []): ?array
     {
         $priceId = $this->priceIdFor($plan, $cycle);
 
         if (! $priceId) {
-            return;
+            return null;
         }
 
         $stripeSub = $user->stripe()->subscriptions->retrieve($subscription->stripe_id, []);
@@ -147,7 +191,30 @@ class StripeBillingProvider implements BillingProvider
                 'id' => $stripeSub->items->data[0]->id,
                 'price' => $priceId,
             ]],
+            // Charge the prorated difference immediately (upgrades) instead of
+            // deferring it to the next renewal invoice. The billing-cycle
+            // anchor stays unchanged so the renewal date is preserved.
+            'proration_behavior' => $options['proration_behavior'] ?? 'create_prorations',
+            'proration_date' => $options['proration_date'] ?? time(),
+            'billing_cycle_anchor' => 'unchanged',
+            'expand' => ['latest_invoice'],
         ]);
+
+        $invoice = $stripeSub->latest_invoice ?? null;
+
+        if (! $invoice) {
+            return null;
+        }
+
+        return [
+            'id' => is_string($invoice->id ?? null) ? $invoice->id : null,
+            'amount_paid' => isset($invoice->amount_paid) ? (int) $invoice->amount_paid : null,
+            'amount_due' => isset($invoice->amount_due) ? (int) $invoice->amount_due : null,
+            'amount_remaining' => isset($invoice->amount_remaining) ? (int) $invoice->amount_remaining : null,
+            'currency' => is_string($invoice->currency ?? null) ? $invoice->currency : 'AUD',
+            'payment_intent' => is_string($invoice->payment_intent ?? null) ? $invoice->payment_intent : null,
+            'billing_reason' => is_string($invoice->billing_reason ?? null) ? $invoice->billing_reason : null,
+        ];
     }
 
     public function billingPortal(User $user, ?string $returnUrl = null): string

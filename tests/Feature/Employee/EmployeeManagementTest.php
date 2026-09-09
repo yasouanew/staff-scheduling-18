@@ -258,6 +258,46 @@ class EmployeeManagementTest extends TestCase
         $this->assertDatabaseHas('users', ['id' => $user->id, 'role' => 'scheduler']);
     }
 
+    public function test_updating_an_employee_can_change_the_linked_accounts_role(): void
+    {
+        $this->actingAsSuperAdmin();
+        $user = User::factory()->create(['role' => 'employee']);
+        $user->assignRole('employee');
+        $employee = Employee::factory()->create(['user_id' => $user->id]);
+
+        // The role travels through the profile PUT alongside other fields — this
+        // is the path the "Edit team member" modal uses (see
+        // EmployeeService::update(), which applies it to the linked user).
+        $this->putJson("/api/v1/employees/{$employee->id}", [
+            'first_name' => 'New',
+            'role' => 'scheduler',
+        ])
+            ->assertOk()
+            ->assertJsonPath('data.first_name', 'New');
+
+        $this->assertTrue($user->fresh()->hasRole('scheduler'));
+        $this->assertFalse($user->fresh()->hasRole('employee'));
+        $this->assertDatabaseHas('users', ['id' => $user->id, 'role' => 'scheduler']);
+        $this->assertDatabaseHas('employees', ['id' => $employee->id, 'first_name' => 'New']);
+    }
+
+    public function test_updating_an_employee_rejects_an_invalid_role(): void
+    {
+        $this->actingAsSuperAdmin();
+        $user = User::factory()->create(['role' => 'employee']);
+        $user->assignRole('employee');
+        $employee = Employee::factory()->create(['user_id' => $user->id]);
+
+        $this->putJson("/api/v1/employees/{$employee->id}", ['role' => 'owner'])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('role');
+
+        // Nothing was applied.
+        $this->assertSame('employee', $user->fresh()->role);
+        $this->assertTrue($user->fresh()->hasRole('employee'));
+        $this->assertFalse($user->fresh()->hasRole('owner'));
+    }
+
     public function test_can_assign_department_to_employee(): void
     {
         $this->actingAsSuperAdmin();

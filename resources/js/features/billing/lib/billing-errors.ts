@@ -27,6 +27,8 @@ export const BILLING_ERROR_CODES = new Set<BillingErrorCode>([
     'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED',
     'CROSS_BUSINESS_ACCESS_DENIED',
     'UNAUTHORIZED',
+    // Acceptance-only activation refusal (EmployeeService::syncAccountAccess()).
+    'INVITATION_PENDING',
 ]);
 
 /**

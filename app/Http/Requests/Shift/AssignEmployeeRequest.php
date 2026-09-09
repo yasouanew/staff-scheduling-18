@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Shift;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class AssignEmployeeRequest extends FormRequest
 {
@@ -24,7 +25,11 @@ class AssignEmployeeRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'employee_id' => ['required', 'integer', 'exists:employees,id'],
+            'employee_id' => [
+                'required',
+                'integer',
+                Rule::exists('employees', 'id')->where('status', 'active'),
+            ],
         ];
     }
 }

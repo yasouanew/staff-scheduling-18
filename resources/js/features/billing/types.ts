@@ -31,6 +31,8 @@ export interface ManagementPlan {
     maxBranches: number | null;
     /** `null` means unlimited employees. */
     maxEmployees: number | null;
+    /** `null` means unlimited active-user seats (alias of {@link maxEmployees}). */
+    maxSeats: number | null;
     /** Feature keys/labels granted by this plan. */
     features: string[];
 }
@@ -51,6 +53,8 @@ export interface SubscriptionPlanSummary {
     interval: BillingCycle;
     maxBranches: number | null;
     maxEmployees: number | null;
+    /** `null` means unlimited active-user seats. */
+    maxSeats: number | null;
 }
 
 /** The subscription state block of the summary. */
@@ -74,9 +78,33 @@ export interface TrialInfo {
     trialEndsAt: string | null;
 }
 
+/**
+ * One previous/present subscription record (the company's subscription
+ * history) shown on the `/subscription` page — including expired records.
+ */
+export interface SubscriptionHistoryRecord {
+    id: string;
+    status: string;
+    billingCycle: BillingCycle;
+    planName: string | null;
+    startsAt: string | null;
+    endsAt: string | null;
+    cancelledAt: string | null;
+    /** Whether this record is the currently-entitled subscription. */
+    isCurrent: boolean;
+}
+
 /** Branch allowance usage (`usage.branches`). */
 export interface BranchUsageSummary {
     used: number;
+    limit: number | null;
+}
+
+/** Active-user seat allowance usage (`usage.seats`). */
+export interface SeatUsageSummary {
+    /** Number of active non-super-admin user accounts in the company. */
+    used: number;
+    /** Plan seat cap; `null` means unlimited. */
     limit: number | null;
 }
 
@@ -90,8 +118,9 @@ export interface BranchUsageItem {
     remaining: number | null;
 }
 
-/** Aggregated branch + employee usage snapshot. */
+/** Aggregated branch + seat + employee usage snapshot. */
 export interface SubscriptionUsage {
+    seats: SeatUsageSummary;
     branches: BranchUsageSummary;
     branchUsage: BranchUsageItem[];
 }
@@ -105,6 +134,22 @@ export interface FeatureEntitlement {
     limit: number | null;
 }
 
+/**
+ * Server-computed proration estimate for switching to another plan/cycle.
+ *
+ * The amount is the "rest of the money" needed to top up to the new plan for
+ * the current billing period. `renews_at` mirrors the subscription's `ends_at`
+ * — a plan switch never changes the renewal date (Task 6).
+ */
+export interface PlanChangeEstimate {
+    /** Positive = amount due now; negative = credit back (downgrade). */
+    amountDue: number;
+    currency: string;
+    renewsAt: string | null;
+    /** Fraction of the current period elapsed, or `null` when unavailable. */
+    elapsed: number | null;
+}
+
 /** Full "my subscription" summary (`GET subscription`). */
 export interface SubscriptionSummary {
     plan: SubscriptionPlanSummary | null;
@@ -112,7 +157,13 @@ export interface SubscriptionSummary {
     trial: TrialInfo | null;
     usage: SubscriptionUsage;
     features: FeatureEntitlement[];
+    planChange: PlanChangeEstimate;
     entitled: boolean;
+    /**
+     * Previous subscription records (including expired ones) for the
+     * subscription page.
+     */
+    subscriptionHistory: SubscriptionHistoryRecord[];
 }
 
 /** The plan catalogue endpoint payload. */
@@ -122,6 +173,7 @@ export interface PlanCatalogue {
 
 /** The usage endpoint payload (`GET subscription/usage`). */
 export interface UsageOverview {
+    seats: SeatUsageSummary;
     branches: BranchUsageSummary;
     branchesUsage: BranchUsageItem[];
 }
@@ -154,4 +206,7 @@ export type BillingErrorCode =
     | 'DOWNGRADE_BRANCH_LIMIT_EXCEEDED'
     | 'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED'
     | 'CROSS_BUSINESS_ACCESS_DENIED'
-    | 'UNAUTHORIZED';
+    | 'UNAUTHORIZED'
+    /** Acceptance-only activation refusal — the member's invitation has not
+     * been accepted yet (EmployeeService::syncAccountAccess()). */
+    | 'INVITATION_PENDING';

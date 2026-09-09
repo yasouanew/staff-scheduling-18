@@ -123,6 +123,14 @@ export function SubscriptionSummaryCard({
                             label="Billing cycle"
                             value={subscription.billingCycle ?? 'Not set'}
                         />
+                        <Row
+                            label="Active users (seats)"
+                            value={
+                                subscription.seatsLimit === null
+                                    ? `${subscription.seatsUsed} used`
+                                    : `${subscription.seatsUsed} / ${subscription.seatsLimit}`
+                            }
+                        />
                         <Row label="Started" value={formatDate(subscription.startsAt)} />
                         {subscription.onTrial && (
                             <Row label="Trial ends" value={formatDate(subscription.trialEndsAt)} />

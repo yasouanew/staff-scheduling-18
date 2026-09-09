@@ -4,12 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { StatCard } from '@/Components/common/StatCard';
-import { BranchCapacityDialog } from '@/features/billing/components/BranchCapacityDialog';
-import { useWebSession } from '@/features/auth/hooks/useWebSession';
-import { useActivateBranch, useUpdateBranchCapacity } from '@/features/billing/hooks/useBranchBilling';
-import { useUsageOverview } from '@/features/billing/hooks/useSubscription';
-import { canManageBranchBilling } from '@/features/billing/lib/permissions';
-import type { BranchUsageItem } from '@/features/billing/types';
 import { getApiErrorMessage } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import { BRANCH_STATUS_LABELS, BRANCH_STATUSES, type Branch, type BranchStatus } from '@/types/branch';
@@ -43,8 +37,6 @@ export function BranchesListPage(): JSX.Element {
     const [status, setStatus] = useState<BranchStatus | typeof ALL_VALUE>(ALL_VALUE);
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [editing, setEditing] = useState<Branch | null>(null);
-    const [capacityBranch, setCapacityBranch] = useState<BranchUsageItem | null>(null);
-    const [capacityOpen, setCapacityOpen] = useState(false);
 
     const { data, isLoading, isError, refetch, isFetching } = useBranches({
         status: status === ALL_VALUE ? undefined : status,
@@ -52,16 +44,9 @@ export function BranchesListPage(): JSX.Element {
     });
 
     const deleteBranch = useDeleteBranch();
-    const usageQuery = useUsageOverview();
-    const activateBranch = useActivateBranch();
-    const updateCapacity = useUpdateBranchCapacity();
-    const webSession = useWebSession();
-    const canManageBranch = canManageBranchBilling(webSession.data);
 
     const branches = useMemo(() => data?.data ?? [], [data]);
     const total = data?.meta?.total ?? branches.length;
-
-    const usage = useMemo(() => usageQuery.data?.branchesUsage ?? [], [usageQuery.data]);
 
     const counts = useMemo(
         () =>
@@ -87,44 +72,6 @@ export function BranchesListPage(): JSX.Element {
                     description: getApiErrorMessage(error, 'Please try again.'),
                 }),
         });
-    };
-
-    /** Open the subscription/capacity dialog for a branch (create a usage entry if unknown). */
-    const handleManageSubscription = (branch: Branch): void => {
-        const existing = usage.find((item) => String(item.id) === String(branch.id));
-        setCapacityBranch(existing ?? {
-            id: branch.id,
-            name: branch.name,
-            active: branch.status === 'active',
-            employeesUsed: 0,
-            employeeCapacity: null,
-            remaining: null,
-        });
-        setCapacityOpen(true);
-    };
-
-    const handleCapacityConfirm = async (employeeCapacity: number): Promise<void> => {
-        if (!capacityBranch) return;
-        const branchId = capacityBranch.id;
-        try {
-            if (capacityBranch.active) {
-                await updateCapacity.mutateAsync({ branchId, employeeCapacity });
-                toast.success('Capacity updated', {
-                    description: `${capacityBranch.name} now holds up to ${employeeCapacity} employees.`,
-                });
-            } else {
-                await activateBranch.mutateAsync({ branchId, employeeCapacity });
-                toast.success('Branch activated', {
-                    description: `${capacityBranch.name} is now available for scheduling.`,
-                });
-            }
-            setCapacityOpen(false);
-            setCapacityBranch(null);
-        } catch (error) {
-            toast.error('Unable to update branch subscription', {
-                description: getApiErrorMessage(error, 'Please try again.'),
-            });
-        }
     };
 
     return (
@@ -226,8 +173,6 @@ export function BranchesListPage(): JSX.Element {
                     <BranchesTable
                         branches={branches}
                         isLoading={isLoading || (isFetching && branches.length === 0)}
-                        usage={usage}
-                        onManageSubscription={canManageBranch ? handleManageSubscription : undefined}
                         onView={(branch) => navigate(`/branches/${branch.id}`)}
                         onEdit={(branch) => setEditing(branch)}
                         onDelete={handleDelete}
@@ -247,20 +192,6 @@ export function BranchesListPage(): JSX.Element {
                     }
                 }}
                 branch={editing}
-            />
-
-            {/* Subscription / capacity dialog (activation, capacity, deactivation) */}
-            <BranchCapacityDialog
-                open={capacityOpen}
-                branch={capacityBranch}
-                currentCapacity={capacityBranch?.employeeCapacity ?? null}
-                suggestedMax={null}
-                isPending={activateBranch.isPending || updateCapacity.isPending}
-                onOpenChange={(next) => {
-                    setCapacityOpen(next);
-                    if (!next) setCapacityBranch(null);
-                }}
-                onConfirm={handleCapacityConfirm}
             />
         </div>
     );

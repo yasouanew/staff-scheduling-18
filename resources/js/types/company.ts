@@ -118,6 +118,8 @@ export interface CompanySubscription {
     billingCycle: string | null;
     /** Resolved plan name, when the plan relation is loaded. */
     planName: string | null;
+    /** Seat allowance on the subscribed plan (`null` = unlimited). */
+    planMaxSeats: number | null;
     /** Whether the subscription is currently on trial. */
     onTrial: boolean;
     /** Whether the subscription is currently active. */
@@ -127,6 +129,10 @@ export interface CompanySubscription {
     startsAt: string | null;
     endsAt: string | null;
     trialEndsAt: string | null;
+    /** Active-user seats consumed (usage.seats.used). */
+    seatsUsed: number;
+    /** Seat cap from the entitled plan (`null` = unlimited). */
+    seatsLimit: number | null;
 }
 
 /* -------------------------------------------------------------------------- */

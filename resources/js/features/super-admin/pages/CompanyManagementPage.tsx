@@ -306,9 +306,9 @@ const columns: ColumnDef<Company>[] = [
     {
         id: 'users',
         accessorKey: 'usersCount',
-        header: 'Users',
+        header: 'User accounts',
         cell: ({ row }) => (
-            <span className="whitespace-nowrap text-muted-foreground">
+            <span className="whitespace-nowrap text-muted-foreground" title="All linked accounts (active seats may be fewer)">
                 {row.original.usersCount ?? 0}
             </span>
         ),

@@ -35,9 +35,18 @@ class ApplyRosterChangesRequest extends FormRequest
             // bigint id column (which would otherwise fail with a 22P02 or
             // validation error in the Review Changes dialog).
             'mutations.*.id' => ['exclude_if:mutations.*.type,add', 'required_if:mutations.*.type,update,cancel,reassign', 'integer', 'exists:shifts,id'],
-            'mutations.*.employee_id' => ['required_if:mutations.*.type,reassign', 'nullable', 'integer', 'exists:employees,id'],
+            'mutations.*.employee_id' => [
+                'required_if:mutations.*.type,reassign',
+                'nullable',
+                'integer',
+                Rule::exists('employees', 'id')->where('status', 'active'),
+            ],
             'mutations.*.shift' => ['required_if:mutations.*.type,add,update', 'array'],
-            'mutations.*.shift.employee_id' => ['nullable', 'integer', 'exists:employees,id'],
+            'mutations.*.shift.employee_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('employees', 'id')->where('status', 'active'),
+            ],
             'mutations.*.shift.position_id' => ['nullable', 'integer', 'exists:positions,id'],
             'mutations.*.shift.department_id' => ['nullable', 'integer', 'exists:departments,id'],
             'mutations.*.shift.branch_id' => ['nullable', 'integer', 'exists:branches,id'],

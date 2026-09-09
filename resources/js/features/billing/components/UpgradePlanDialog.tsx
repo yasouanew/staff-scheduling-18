@@ -1,4 +1,5 @@
-import { ArrowRight } from 'lucide-react';
+import { format, parseISO } from 'date-fns';
+import { ArrowRight, CalendarClock } from 'lucide-react';
 
 import { Badge } from '@/Components/ui/badge';
 import { Button } from '@/Components/ui/button';
@@ -11,8 +12,8 @@ import {
     DialogTitle,
 } from '@/Components/ui/dialog';
 
-import type { ManagementPlan, SubscriptionSummary } from '../types';
-import { formatCapacity, formatCyclePrice } from '../lib/format';
+import type { ManagementPlan, PlanChangeEstimate, SubscriptionSummary } from '../types';
+import { formatCapacity, formatCyclePrice, formatPrice } from '../lib/format';
 
 interface UpgradePlanDialogProps {
     open: boolean;
@@ -20,6 +21,11 @@ interface UpgradePlanDialogProps {
     /** The plan the user selected from the catalogue. */
     targetPlan: ManagementPlan | null;
     selectedCycle: string;
+    /**
+     * Server-computed proration estimate for the selected target plan/cycle.
+     * `null` while the estimate is loading or unavailable.
+     */
+    estimate: PlanChangeEstimate | null;
     /** Whether the change is a downgrade (limits shrink) vs an upgrade. */
     isDowngrade: boolean;
     isPending: boolean;
@@ -37,11 +43,10 @@ function comparePlanLevel(current: ManagementPlan, target: ManagementPlan): 'upg
 }
 
 function rankOf(plan: ManagementPlan): number {
-    // Rank by how many resources the plan unlocks; used only to label the
-    // change direction in the UI. The backend decides whether a change is legal.
-    const branches = plan.maxBranches === null ? 10_000 : plan.maxBranches;
-    const employees = plan.maxEmployees === null ? 10_000 : plan.maxEmployees;
-    return branches * 1000 + employees;
+    // Rank by the billable seat allowance (active users); used only to label
+    // the change direction in the UI. The backend decides whether a change is
+    // legal.
+    return plan.maxSeats === null ? 10_000 : plan.maxSeats;
 }
 
 function isDowngradeDirection(summary: SubscriptionSummary | null, target: ManagementPlan | null): boolean {
@@ -58,24 +63,41 @@ function isDowngradeDirection(summary: SubscriptionSummary | null, target: Manag
         interval: [summary.plan.interval],
         maxBranches: summary.plan.maxBranches,
         maxEmployees: summary.plan.maxEmployees,
+        maxSeats: summary.plan.maxSeats,
         features: [],
     };
     return comparePlanLevel(current, target) === 'downgrade';
 }
 
+/** Safe date formatter for ISO strings (matches the billing page helper). */
+function formatDate(value: string | null | undefined): string {
+    if (!value) return '—';
+    try {
+        return format(parseISO(value), 'd MMM yyyy');
+    } catch {
+        return value;
+    }
+}
+
 /**
  * Confirmation dialog for changing the business plan.
  *
- * Shows the current plan alongside the selected plan and the resulting branch /
- * employee limits, and lets the user confirm. The backend remains authoritative
- * on the final price and whether the change is permitted (it may reject an
- * invalid downgrade with `DOWNGRADE_BRANCH_LIMIT_EXCEEDED` / etc.).
+ * Shows the current plan alongside the selected plan and the resulting
+ * active-user seat allowance, and lets the user confirm. The backend remains
+ * authoritative on the final price and whether the change is permitted (it may
+ * reject an invalid downgrade with `DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED` / etc.).
+ *
+ * The `estimate` prop carries the server-computed proration for the selected
+ * target plan/cycle: switching plans charges (or credits) the prorated
+ * difference for the current billing period, and the renewal date stays the
+ * same (Task 6).
  */
 export function UpgradePlanDialog({
     open,
     summary,
     targetPlan,
     selectedCycle,
+    estimate,
     isDowngrade,
     isPending,
     onOpenChange,
@@ -99,6 +121,17 @@ export function UpgradePlanDialog({
                 ? targetPlan.priceSixMonthly ?? targetPlan.priceMonthly
                 : targetPlan.priceYearly;
 
+    // Server-computed proration estimate for the selected target plan/cycle.
+    // `amountDue` is the "rest of the money" to top up to the new plan for the
+    // current period (positive = pay now, negative = credit back). `renewsAt`
+    // mirrors the subscription's `ends_at` — a plan switch never changes the
+    // renewal date.
+    const estimateCurrency = estimate?.currency ?? summary?.plan?.currency ?? 'AUD';
+    const amountDue = estimate?.amountDue ?? 0;
+    const renewsAt = estimate?.renewsAt ?? summary?.subscription?.renewsAt ?? summary?.subscription?.endsAt;
+    const hasEstimate = estimate?.elapsed !== null && estimate?.elapsed !== undefined;
+    const hasProration = hasEstimate && Math.abs(amountDue) > 0.004;
+
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
             <DialogContent className="max-w-lg">
@@ -120,9 +153,8 @@ export function UpgradePlanDialog({
                             <p className="mt-1 font-semibold text-foreground">{summary?.plan?.name ?? '—'}</p>
                             <div className="mt-3 space-y-1 text-sm text-muted-foreground">
                                 <p>
-                                    Branches: {formatCapacity(summary?.plan?.maxBranches ?? null)}
+                                    Active users (seats): {formatCapacity(summary?.plan?.maxSeats ?? null)}
                                 </p>
-                                <p>Employees: {formatCapacity(summary?.plan?.maxEmployees ?? null)}</p>
                             </div>
                             {currentPrice !== undefined && currentPrice !== null && (
                                 <p className="mt-3 text-sm font-medium text-foreground">
@@ -141,8 +173,7 @@ export function UpgradePlanDialog({
                             </div>
                             <p className="mt-1 font-semibold text-foreground">{targetPlan.name}</p>
                             <div className="mt-3 space-y-1 text-sm text-muted-foreground">
-                                <p>Branches: {formatCapacity(targetPlan.maxBranches)}</p>
-                                <p>Employees: {formatCapacity(targetPlan.maxEmployees)}</p>
+                                <p>Active users (seats): {formatCapacity(targetPlan.maxSeats)}</p>
                             </div>
                             <p className="mt-3 text-sm font-medium text-foreground">
                                 {formatCyclePrice(targetPrice, targetPlan.currency, selectedCycle)}
@@ -163,11 +194,31 @@ export function UpgradePlanDialog({
                         </div>
                     )}
 
+                    {hasProration && (
+                        <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-foreground">
+                            <p className="font-medium text-foreground">
+                                {amountDue > 0 ? 'Prorated charge due now' : 'Prorated credit applied'}
+                            </p>
+                            <p className="mt-1 text-muted-foreground">
+                                {amountDue > 0
+                                    ? `You'll pay ${formatPrice(amountDue, estimateCurrency)} now to match the new plan for the rest of your current billing period.`
+                                    : `A credit of ${formatPrice(Math.abs(amountDue), estimateCurrency)} will be applied toward your next renewal.`}
+                            </p>
+                        </div>
+                    )}
+
                     <div className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm text-foreground">
                         {isDowngrade
-                            ? 'If your current branch or employee usage exceeds the new plan limits, the change may be blocked.'
+                            ? 'If your active users (seats) exceed the new plan seat limit, the change may be blocked.'
                             : 'Your subscription will be updated to the new plan on confirmation.'}
                     </div>
+
+                    <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />
+                        {renewsAt
+                            ? `Your renewal date stays the same: ${formatDate(renewsAt)}`
+                            : 'Your renewal date stays the same.'}
+                    </p>
                 </div>
 
                 <DialogFooter>

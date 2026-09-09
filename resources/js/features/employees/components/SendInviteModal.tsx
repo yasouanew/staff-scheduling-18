@@ -1,13 +1,17 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Globe, Smartphone, X } from 'lucide-react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { toast } from 'sonner';
 import { z } from 'zod';
 
 import { LoadingSpinner } from '@/Components/common/LoadingSpinner';
+import { CapacityWarning } from '@/features/billing/components/CapacityWarning';
+import { UpgradePromptDialog } from '@/features/billing/components/UpgradePromptDialog';
+import { useSeatCapacity } from '@/features/billing/context/SeatCapacityContext';
 import { getApiErrorMessage } from '@/lib/api-client';
+import { handleCapacityError } from '@/lib/capacity-errors';
 import { cn } from '@/lib/utils';
 import {
     DEFAULT_EMPLOYEE_ROLE,
@@ -110,6 +114,8 @@ function ChannelPreview({ channel }: { channel: InvitationChannel }): JSX.Elemen
  */
 export function SendInviteModal({ employee, onOpenChange }: SendInviteModalProps): JSX.Element {
     const sendInvitation = useSendInvitation();
+    const seatCapacity = useSeatCapacity();
+    const [upgradeOpen, setUpgradeOpen] = useState(false);
 
     const {
         register,
@@ -139,8 +145,23 @@ export function SendInviteModal({ employee, onOpenChange }: SendInviteModalProps
         });
     }, [employee?.id, reset]); // eslint-disable-line react-hooks/exhaustive-deps
 
+
     const submit = handleSubmit(async (values) => {
         if (!employee) return;
+
+        // While the plan is at its seat limit no invite can be sent — new or
+        // re-sent — because the invitee could not accept (activate) until a
+        // seat frees up. The backend refuses with 422 EMPLOYEE_CAPACITY_REACHED
+        // and force-expires outstanding invites; pre-empt that here and guide
+        // the admin to upgrade or deactivate another member.
+        if (
+            seatCapacity.available &&
+            seatCapacity.seatsLimit !== null &&
+            seatCapacity.isFull
+        ) {
+            setUpgradeOpen(true);
+            return;
+        }
 
         const payload: SendInvitationInput = values;
 
@@ -158,6 +179,15 @@ export function SendInviteModal({ employee, onOpenChange }: SendInviteModalProps
             });
             onOpenChange(false);
         } catch (error) {
+            // A `422 EMPLOYEE_CAPACITY_REACHED` means the seat allowance is full
+            // and stale on our side. Surface the upgrade prompt instead of a
+            // generic toast, always refetching seats so the count is refreshed.
+            const seatError = await handleCapacityError(error, () => seatCapacity.refetch());
+            if (seatError) {
+                setUpgradeOpen(true);
+                return;
+            }
+
             toast.error('Unable to send invitation', {
                 description: getApiErrorMessage(error, 'Something went wrong. Please try again.'),
             });
@@ -167,143 +197,213 @@ export function SendInviteModal({ employee, onOpenChange }: SendInviteModalProps
     const isResend = employee?.invitation != null;
 
     return (
-        <Dialog.Root open={employee !== null} onOpenChange={onOpenChange}>
-            <Dialog.Portal>
-                <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-                <Dialog.Content
-                    className={cn(
-                        'fixed left-1/2 top-1/2 z-50 flex max-h-[92vh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col',
-                        'rounded-xl border border-border bg-card shadow-xl focus:outline-none',
-                        'data-[state=open]:animate-in data-[state=closed]:animate-out',
-                        'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
-                        'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
-                    )}
-                >
-                    {/* Header */}
-                    <div className="flex items-start justify-between border-b border-border p-6">
-                        <div className="space-y-1">
-                            <Dialog.Title className="text-lg font-semibold tracking-tight text-foreground">
-                                {isResend ? 'Resend invitation' : 'Send invitation'}
-                            </Dialog.Title>
-                            <Dialog.Description className="text-sm text-muted-foreground">
-                                Email {employee?.name ?? 'this employee'} everything they need to set up
-                                their account.
-                            </Dialog.Description>
+        <>
+            <Dialog.Root open={employee !== null} onOpenChange={onOpenChange}>
+                <Dialog.Portal>
+                    <Dialog.Overlay className="fixed inset-0 z-50 bg-foreground/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+                    <Dialog.Content
+                        className={cn(
+                            'fixed left-1/2 top-1/2 z-50 flex max-h-[92vh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col',
+                            'rounded-xl border border-border bg-card shadow-xl focus:outline-none',
+                            'data-[state=open]:animate-in data-[state=closed]:animate-out',
+                            'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+                            'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
+                        )}
+                    >
+                        {/* Header */}
+                        <div className="flex items-start justify-between border-b border-border p-6">
+                            <div className="space-y-1">
+                                <Dialog.Title className="text-lg font-semibold tracking-tight text-foreground">
+                                    {isResend ? 'Resend invitation' : 'Send invitation'}
+                                </Dialog.Title>
+                                <Dialog.Description className="text-sm text-muted-foreground">
+                                    Email {employee?.name ?? 'this employee'} everything they need to set up
+                                    their account.
+                                </Dialog.Description>
+                            </div>
+                            <Dialog.Close
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-secondary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                aria-label="Close"
+                            >
+                                <X className="h-5 w-5" aria-hidden="true" />
+                            </Dialog.Close>
                         </div>
-                        <Dialog.Close
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-secondary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                            aria-label="Close"
-                        >
-                            <X className="h-5 w-5" aria-hidden="true" />
-                        </Dialog.Close>
-                    </div>
 
-                    {/* Body */}
-                    <form onSubmit={submit} noValidate className="flex flex-1 flex-col overflow-y-auto">
-                        <div className="flex-1 space-y-5 p-6">
-                            {/* Email */}
-                            <div className="space-y-1.5">
-                                <label
-                                    htmlFor="invite-email"
-                                    className="block text-sm font-medium text-foreground"
-                                >
-                                    Send to
-                                </label>
-                                <input
-                                    id="invite-email"
-                                    type="email"
-                                    autoComplete="email"
-                                    placeholder="name@company.com.au"
-                                    aria-invalid={Boolean(errors.email)}
-                                    className={fieldClasses}
-                                    {...register('email')}
-                                />
-                                {errors.email ? (
-                                    <p className="text-sm text-danger">{errors.email.message}</p>
-                                ) : (
+                        {/* Body */}
+                        <form onSubmit={submit} noValidate className="flex flex-1 flex-col overflow-y-auto">
+                            <div className="flex-1 space-y-5 p-6">
+                                {/* Email */}
+                                <div className="space-y-1.5">
+                                    <label
+                                        htmlFor="invite-email"
+                                        className="block text-sm font-medium text-foreground"
+                                    >
+                                        Send to
+                                    </label>
+                                    <input
+                                        id="invite-email"
+                                        type="email"
+                                        autoComplete="email"
+                                        placeholder="name@company.com.au"
+                                        aria-invalid={Boolean(errors.email)}
+                                        className={fieldClasses}
+                                        {...register('email')}
+                                    />
+                                    {errors.email ? (
+                                        <p className="text-sm text-danger">{errors.email.message}</p>
+                                    ) : (
+                                        <p className="text-sm text-muted-foreground">
+                                            This also becomes their sign-in address.
+                                        </p>
+                                    )}
+                                </div>
+
+                                {/* Role — also decides which onboarding journey is emailed */}
+                                <div className="space-y-1.5">
+                                    <label
+                                        htmlFor="invite-role"
+                                        className="block text-sm font-medium text-foreground"
+                                    >
+                                        Access level
+                                    </label>
+                                    <select
+                                        id="invite-role"
+                                        aria-describedby="invite-role-description"
+                                        className={fieldClasses}
+                                        {...register('role')}
+                                    >
+                                        {EMPLOYEE_ROLES.map((option) => (
+                                            <option key={option} value={option}>
+                                                {EMPLOYEE_ROLE_LABELS[option]}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <p id="invite-role-description" className="text-sm text-muted-foreground">
+                                        {EMPLOYEE_ROLE_DESCRIPTIONS[selectedRole]}
+                                    </p>
+                                </div>
+
+                                {/* What the invitee will actually experience */}
+                                <ChannelPreview channel={channel} />
+
+                                {/* Active-user (seat) guidance — the plan's seat allowance
+                                is separate from branch capacity. While the plan is full, a
+                                brand-new invitation can't be sent (the invitee could never
+                                accept), but re-sending an existing pending member is allowed. */}
+                                {seatCapacity.available && seatCapacity.seatsLimit !== null && (
+                                    <>
+                                        <CapacityWarning
+                                            used={seatCapacity.seatsUsed}
+                                            capacity={seatCapacity.seatsLimit}
+                                            action={
+                                                seatCapacity.isFull ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setUpgradeOpen(true)}
+                                                        className={cn(
+                                                            'inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-3 text-xs font-semibold text-primary transition-colors',
+                                                            'hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                                        )}
+                                                    >
+                                                        Upgrade plan
+                                                    </button>
+                                                ) : undefined
+                                            }
+                                        />
+                                        <p
+                                            role="note"
+                                            className={cn(
+                                                'rounded-lg border p-3 text-xs text-foreground',
+                                                seatCapacity.isFull
+                                                    ? 'border-danger/30 bg-danger/10'
+                                                    : 'border-warning/30 bg-warning/10',
+                                            )}
+                                        >
+                                            {seatCapacity.isFull ? (
+                                                <>
+                                                    Your plan is at its{' '}
+                                                    <span className="font-medium">member limit</span>,
+                                                    so no invite can be sent and any invitation still
+                                                    awaiting acceptance has been expired. Deactivate
+                                                    another team member to free a seat, or{' '}
+                                                    <span className="font-medium">
+                                                        upgrade your plan
+                                                    </span>{' '}
+                                                    to add more.
+                                                </>
+                                            ) : (
+                                                <>
+                                                    The invitee stays{' '}
+                                                    <span className="font-medium">Pending</span> until
+                                                    they accept — they only take a seat once they set
+                                                    their password.
+                                                </>
+                                            )}
+                                        </p>
+                                    </>
+                                )}
+
+                                {isResend && (
                                     <p className="text-sm text-muted-foreground">
-                                        This also becomes their sign-in address.
+                                        Sending again replaces any earlier link or code, so previous emails
+                                        will stop working.
                                     </p>
                                 )}
                             </div>
 
-                            {/* Role — also decides which onboarding journey is emailed */}
-                            <div className="space-y-1.5">
-                                <label
-                                    htmlFor="invite-role"
-                                    className="block text-sm font-medium text-foreground"
-                                >
-                                    Access level
-                                </label>
-                                <select
-                                    id="invite-role"
-                                    aria-describedby="invite-role-description"
-                                    className={fieldClasses}
-                                    {...register('role')}
-                                >
-                                    {EMPLOYEE_ROLES.map((option) => (
-                                        <option key={option} value={option}>
-                                            {EMPLOYEE_ROLE_LABELS[option]}
-                                        </option>
-                                    ))}
-                                </select>
-                                <p id="invite-role-description" className="text-sm text-muted-foreground">
-                                    {EMPLOYEE_ROLE_DESCRIPTIONS[selectedRole]}
-                                </p>
-                            </div>
-
-                            {/* What the invitee will actually experience */}
-                            <ChannelPreview channel={channel} />
-
-                            {isResend && (
-                                <p className="text-sm text-muted-foreground">
-                                    Sending again replaces any earlier link or code, so previous emails
-                                    will stop working.
-                                </p>
-                            )}
-                        </div>
-
-                        {/* Footer actions */}
-                        <div className="flex items-center justify-end gap-3 border-t border-border p-6">
-                            <Dialog.Close asChild>
+                            {/* Footer actions */}
+                            <div className="flex items-center justify-end gap-3 border-t border-border p-6">
+                                <Dialog.Close asChild>
+                                    <button
+                                        type="button"
+                                        className={cn(
+                                            'inline-flex h-11 items-center justify-center rounded-lg border border-input bg-card px-4 text-sm font-medium text-foreground transition-colors',
+                                            'hover:bg-secondary hover:text-secondary-foreground',
+                                            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                        )}
+                                    >
+                                        Cancel
+                                    </button>
+                                </Dialog.Close>
                                 <button
-                                    type="button"
+                                    type="submit"
+                                    disabled={isSubmitting}
                                     className={cn(
-                                        'inline-flex h-11 items-center justify-center rounded-lg border border-input bg-card px-4 text-sm font-medium text-foreground transition-colors',
-                                        'hover:bg-secondary hover:text-secondary-foreground',
-                                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                        'inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors',
+                                        'hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                                        'disabled:cursor-not-allowed disabled:opacity-70',
                                     )}
                                 >
-                                    Cancel
+                                    {isSubmitting ? (
+                                        <>
+                                            <LoadingSpinner
+                                                className="text-primary-foreground"
+                                                label="Sending"
+                                            />
+                                            Sending...
+                                        </>
+                                    ) : isResend ? (
+                                        'Resend invitation'
+                                    ) : (
+                                        'Send invitation'
+                                    )}
                                 </button>
-                            </Dialog.Close>
-                            <button
-                                type="submit"
-                                disabled={isSubmitting}
-                                className={cn(
-                                    'inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors',
-                                    'hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-                                    'disabled:cursor-not-allowed disabled:opacity-70',
-                                )}
-                            >
-                                {isSubmitting ? (
-                                    <>
-                                        <LoadingSpinner
-                                            className="text-primary-foreground"
-                                            label="Sending"
-                                        />
-                                        Sending...
-                                    </>
-                                ) : isResend ? (
-                                    'Resend invitation'
-                                ) : (
-                                    'Send invitation'
-                                )}
-                            </button>
-                        </div>
-                    </form>
-                </Dialog.Content>
-            </Dialog.Portal>
-        </Dialog.Root>
+                            </div>
+                        </form>
+                    </Dialog.Content>
+                </Dialog.Portal>
+            </Dialog.Root>
+
+            {/* Upgrade prompt surfaced when sending is blocked by the plan's
+            active-user seat allowance. */}
+            <UpgradePromptDialog
+                open={upgradeOpen}
+                seatsNeeded={
+                    seatCapacity.seatsLimit !== null ? seatCapacity.seatsUsed + 1 : 1
+                }
+                selectedCycle="monthly"
+                onOpenChange={setUpgradeOpen}
+            />
+        </>
     );
 }

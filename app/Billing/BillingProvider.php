@@ -48,6 +48,29 @@ interface BillingProvider
     ): array;
 
     /**
+     * Start a hosted, one-off Checkout session for a single charge — used to
+     * collect the prorated "rest of the money" for a plan upgrade when the
+     * customer has no default payment method on file.
+     *
+     * The session carries `purpose: plan_change` metadata (plus the local
+     * subscription id, target plan and billing cycle) so the payment-completion
+     * handler can apply the deferred plan change.
+     *
+     * @return array{url: string, session_id: string}
+     */
+    public function startOneOffCheckout(
+        User $user,
+        float $amount,
+        string $currency,
+        string $description,
+        string $subscriptionId,
+        string $planId,
+        string $cycle,
+        ?string $successUrl,
+        ?string $cancelUrl,
+    ): array;
+
+    /**
      * Cancel a subscription immediately or at the end of the current period.
      */
     public function cancel(User $user, Subscription $subscription, bool $immediately = false): void;
@@ -59,8 +82,18 @@ interface BillingProvider
 
     /**
      * Swap the subscription's plan / billing cycle in the provider.
+     *
+     * @param  array{proration_behavior?: string, proration_date?: int}  $options
+     *     - `proration_behavior`: Stripe proration strategy. `always_invoice`
+     *       charges the prorated difference immediately (upgrades); the
+     *       default `create_prorations` defers it to the next renewal.
+     *     - `proration_date`: unix timestamp the proration is calculated at
+     *       (defaults to now).
+     * @return array<string, mixed>|null  The provider invoice produced by the
+     *     swap (id, amount_paid, amount_due, currency, payment_intent,
+     *     billing_reason) or null when the provider returns none.
      */
-    public function swap(User $user, Subscription $subscription, Plan $plan, string $cycle): void;
+    public function swap(User $user, Subscription $subscription, Plan $plan, string $cycle, array $options = []): ?array;
 
     /**
      * Create a Stripe Customer Portal session for the given customer.

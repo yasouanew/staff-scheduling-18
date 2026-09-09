@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Billing\BillingProvider;
+use App\Exceptions\BillingLimitException;
 use App\Http\Controllers\Controller;
 use App\Models\Plan;
 use App\Models\Subscription;
@@ -9,6 +11,7 @@ use App\Models\User;
 use App\Models\WebhookEvent;
 use App\Notifications\SubscriptionActivatedNotification;
 use App\Services\BillingLifecycleService;
+use App\Services\SubscriptionService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -19,6 +22,7 @@ class StripeBillingWebhookController extends Controller
 {
     public function __construct(
         private readonly BillingLifecycleService $lifecycle,
+        private readonly \App\Services\SubscriptionService $subscriptions,
     ) {
     }
 
@@ -139,10 +143,54 @@ class StripeBillingWebhookController extends Controller
             return;
         }
 
+        // A one-off `purpose: plan_change` Checkout session (opened when the
+        // customer had no default payment method for an upgrade) carries the
+        // deferred plan switch in its metadata. Apply it — and record the
+        // collected proration money — only once the session is actually paid.
+        if (($object->metadata->purpose ?? null) === 'plan_change') {
+            $this->completePlanChangeFromSession($object, $subscription);
+
+            return;
+        }
+
         $subscription->update([
             'stripe_id' => is_string($object->subscription) ? $object->subscription : $subscription->stripe_id,
             'checkout_session_id' => is_string($object->id) ? $object->id : $subscription->checkout_session_id,
         ]);
+    }
+
+    /**
+     * Apply a deferred plan change from a paid one-off Checkout session.
+     *
+     * Failures (e.g. the business outgrew the target plan's allowances while
+     * the session was open) must NOT fail the webhook delivery — the money is
+     * already collected — so they are reported for manual follow-up instead of
+     * triggering a Stripe retry loop.
+     */
+    private function completePlanChangeFromSession(object $object, Subscription $subscription): void
+    {
+        if (($object->payment_status ?? 'unpaid') !== 'paid') {
+            return;
+        }
+
+        $planId = (string) ($object->metadata->plan_id ?? '');
+
+        if ($planId === '') {
+            return;
+        }
+
+        $cycle = (string) ($object->metadata->billing_cycle ?? $subscription->billing_cycle);
+
+        try {
+            $this->subscriptions->completePlanChangeCheckout($subscription, $planId, $cycle, [
+                'id' => is_string($object->id) ? $object->id : null,
+                'amount_paid' => $object->amount_total ?? 0,
+                'currency' => $object->currency ?? 'aud',
+                'payment_intent' => is_string($object->payment_intent ?? null) ? $object->payment_intent : null,
+            ]);
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     protected function handleInvoicePaid(object $object, ?Subscription $subscription): void
@@ -156,9 +204,25 @@ class StripeBillingWebhookController extends Controller
             $this->invoiceArray($object),
             isset($object->period_start) ? (int) $object->period_start : null,
             isset($object->period_end) ? (int) $object->period_end : null,
+            $this->invoiceTypeFor($object),
         );
 
-        $this->activateSubscription($subscription);
+        // A proration invoice (billing_reason = subscription_update) is the
+        // provider's confirmation of a plan-change charge — it must not
+        // re-run the activation flow (notification / company unlock), which
+        // belongs to the subscription's own lifecycle.
+        if ($this->invoiceTypeFor($object) !== 'proration') {
+            $this->activateSubscription($subscription);
+        }
+    }
+
+    /**
+     * Classify an invoice event: a plan-change (proration) charge vs a
+     * regular subscription charge.
+     */
+    private function invoiceTypeFor(object $object): string
+    {
+        return ($object->billing_reason ?? null) === 'subscription_update' ? 'proration' : 'subscription';
     }
 
     protected function handleInvoiceFailed(object $object, ?Subscription $subscription): void
@@ -192,6 +256,14 @@ class StripeBillingWebhookController extends Controller
         // once it is confirmed in the subscription object's line items. This
         // keeps the local row converged on the provider even if an upgrade or
         // downgrade request and its webhook arrive out of order.
+        //
+        // The seat-capacity allowance is a hard product rule that applies on
+        // every downgrade path — including provider-confirmed changes (swaps
+        // done through the Stripe dashboard, proration, upgrades/downgrades
+        // whose request and webhook crossed in flight). A plan change that
+        // would strand the business over its target plan's seat allowance is
+        // rejected locally and rolled back in the provider so the local row and
+        // the charge never silently diverge from the seat rule.
         $this->reconcilePlanFromProvider($subscription, $object);
 
         if ($status === 'active') {
@@ -292,11 +364,53 @@ class StripeBillingWebhookController extends Controller
             return;
         }
 
+        // The seat-capacity allowance is a hard product rule that applies on
+        // every plan-change path — including provider-confirmed changes (swaps
+        // done through the Stripe dashboard, proration, or an upgrade/downgrade
+        // whose request and confirmation webhook crossed in flight). Guard the
+        // swap here so a downgrade that would strand the business over the
+        // target plan's seat allowance is never applied locally. On a seat-cap
+        // conflict the charge is reverted in the provider to the plan the
+        // business actually fits inside, keeping the local row and the Stripe
+        // price converged on a legal plan.
+        try {
+            $this->subscriptions->assertCanChangeToPlan($subscription, $plan);
+        } catch (BillingLimitException) {
+            $this->revertPlanChangeInProvider($subscription);
+
+            return;
+        }
+
         $subscription->update([
             'plan_id' => $plan->id,
             'billing_cycle' => $cycle,
             'stripe_price' => $priceId,
         ]);
+    }
+
+    /**
+     * Roll back a provider-confirmed plan change that the business is not
+     * allowed to keep (active seats exceed the target plan's seat allowance).
+     *
+     * The provider is authoritative for what the customer is charged, so the
+     * subscription is swapped back to the plan recorded locally (the plan the
+     * business actually fits inside). Stripe prorates the difference back, and
+     * because the swap happens inside the same webhook transaction the local
+     * row is never mutated to the disallowed plan in the first place. A
+     * business with no Stripe subscription (e.g. a manually provisioned trial)
+     * needs no provider rollback — there is no charge to correct.
+     */
+    private function revertPlanChangeInProvider(Subscription $subscription): void
+    {
+        $plan = $subscription->plan;
+
+        if (! $plan || ! $subscription->stripe_id || ! $subscription->user) {
+            return;
+        }
+
+        $provider = app(BillingProvider::class);
+
+        $provider->swap($subscription->user, $subscription, $plan, $subscription->billing_cycle);
     }
 
     /**

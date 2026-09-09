@@ -22,6 +22,12 @@ enum SubscriptionStatus: string
     case Paused = 'paused';
     case Cancelled = 'cancelled';
     case Expired = 'expired';
+    /**
+     * A Stripe Checkout session was started but never completed (no payment).
+     * The row exists locally so the admin can resume / discard the attempt
+     * from the `/subscription` page; it never grants access.
+     */
+    case Incomplete = 'incomplete';
 
     /**
      * Human-readable label for UI rendering.
@@ -37,6 +43,7 @@ enum SubscriptionStatus: string
             self::Paused => 'Paused',
             self::Cancelled => 'Cancelled',
             self::Expired => 'Expired',
+            self::Incomplete => 'Incomplete',
         };
     }
 
@@ -51,5 +58,14 @@ enum SubscriptionStatus: string
     public function grantsAccess(): bool
     {
         return in_array($this, [self::Trial, self::Active, self::GracePeriod], true);
+    }
+
+    /**
+     * Whether this status represents a checkout attempt that can still be
+     * completed (payment pending) rather than a finished lifecycle state.
+     */
+    public function isIncomplete(): bool
+    {
+        return $this === self::Incomplete;
     }
 }

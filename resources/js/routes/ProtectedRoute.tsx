@@ -29,10 +29,14 @@ export function ProtectedRoute(): JSX.Element {
     }
 
     // A locked company may still reach the self-service Subscription & Billing
-    // experience (`/subscription`) to reactivate or update payment details.
-    const isBillingRoute = location.pathname === '/subscription';
+    // experience (`/subscription`) to reactivate or update payment details,
+    // and the Employee Directory (`/employees`) to view and manage team seats.
+    const isAllowedLockedRoute =
+        location.pathname === '/subscription' ||
+        location.pathname === '/employees' ||
+        location.pathname.startsWith('/employees/');
 
-    if (session.data?.company_access?.is_locked && location.pathname !== '/account-locked' && !isBillingRoute) {
+    if (session.data?.company_access?.is_locked && location.pathname !== '/account-locked' && !isAllowedLockedRoute) {
         return <Navigate to="/account-locked" replace state={{ from: location }} />;
     }
 

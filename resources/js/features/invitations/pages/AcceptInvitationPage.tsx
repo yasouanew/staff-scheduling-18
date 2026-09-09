@@ -6,6 +6,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 
 import { LoadingSpinner } from '@/Components/common/LoadingSpinner';
+import { isCapacityReachedError } from '@/features/billing/lib/billing-errors';
 import { AuthLayout } from '@/features/auth/components/AuthLayout';
 import { resetPasswordSchema, type ResetPasswordFormValues } from '@/features/auth/schemas';
 import { getApiErrorMessage } from '@/lib/api-client';
@@ -89,12 +90,24 @@ export default function AcceptInvitationPage(): JSX.Element {
             // No session is issued by design, so the new password is used straight away.
             navigate('/login', { replace: true });
         } catch (error) {
-            toast.error('Unable to set your password', {
-                description: getApiErrorMessage(
-                    error,
-                    'This invitation may have expired. Ask your administrator to send a new one.',
-                ),
-            });
+            // Accepting a web invitation activates an account, which consumes a
+            // seat. The backend guards this and returns a structured
+            // EMPLOYEE_CAPACITY_REACHED 422 when the company is at its plan's
+            // active-user limit — that is not an expiry, so surface it as a
+            // capacity problem rather than implying the invitation is invalid.
+            if (isCapacityReachedError(error)) {
+                toast.error('Seat limit reached', {
+                    description:
+                        'Your team has reached its active-user limit. Ask your administrator to upgrade the plan or free up a seat, then try again.',
+                });
+            } else {
+                toast.error('Unable to set your password', {
+                    description: getApiErrorMessage(
+                        error,
+                        'This invitation may have expired. Ask your administrator to send a new one.',
+                    ),
+                });
+            }
         }
     });
 

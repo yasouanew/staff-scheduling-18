@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Billing;
 
+use App\Billing\BillingProvider;
 use App\Models\Company;
 use App\Models\Plan;
 use App\Models\Subscription;
@@ -107,6 +108,103 @@ class BillingProviderWebhookTest extends TestCase
         ], $overrides));
 
         return $subscription;
+    }
+
+    /**
+     * Bind a fake provider so no real Stripe API call is ever made (including
+     * the roll-back `swap` invoked when a provider-confirmed downgrade would
+     * exceed the target plan's seat allowance). The fake records every `swap`
+     * call on a public property so tests can assert on the rollback.
+     */
+    private function fakeBillingProvider(): object
+    {
+        $fake = new class implements BillingProvider
+        {
+            /**
+             * Recorded swap calls.
+             *
+             * @var array<int, array{plan: Plan, cycle: string}>
+             */
+            public array $swaps = [];
+
+            public function startCheckout(
+                User $user,
+                Plan $plan,
+                string $cycle,
+                string $subscriptionId,
+                ?string $successUrl,
+                ?string $cancelUrl,
+                ?int $trialDays = null,
+            ): array {
+                return [
+                    'url' => 'https://checkout.stripe.test/session/'.$subscriptionId,
+                    'session_id' => 'cs_test_'.$subscriptionId,
+                ];
+            }
+
+            public function createSubscription(
+                User $user,
+                Plan $plan,
+                string $cycle,
+                string $paymentMethod,
+                ?int $trialDays = null,
+            ): array {
+                return [
+                    'subscription_id' => 'sub_test_fake',
+                    'status' => 'active',
+                    'payment_intent_id' => null,
+                    'invoice_reference' => null,
+                ];
+            }
+
+            public function startOneOffCheckout(
+                User $user,
+                float $amount,
+                string $currency,
+                string $description,
+                string $subscriptionId,
+                string $planId,
+                string $cycle,
+                ?string $successUrl,
+                ?string $cancelUrl,
+            ): array {
+                return [
+                    'url' => 'https://checkout.stripe.test/one-off/'.$subscriptionId,
+                    'session_id' => 'cs_test_oneoff_'.$subscriptionId,
+                ];
+            }
+
+            public function cancel(User $user, Subscription $subscription, bool $immediately = false): void
+            {
+                // no-op
+            }
+
+            public function resume(User $user, Subscription $subscription): void
+            {
+                // no-op
+            }
+
+            public function swap(User $user, Subscription $subscription, Plan $plan, string $cycle, array $options = []): ?array
+            {
+                $this->swaps[] = ['plan' => $plan, 'cycle' => $cycle, 'options' => $options];
+
+                return null;
+            }
+
+            public function billingPortal(User $user, ?string $returnUrl = null): string
+            {
+                return 'https://billing.stripe.test/portal/session';
+            }
+
+            public function refund(User $user, string $paymentIntentId, float $amount): array
+            {
+                return ['refund_id' => 're_test_fake', 'amount_refunded' => $amount];
+            }
+        };
+
+        $this->app->instance(BillingProvider::class, $fake);
+
+        return $fake;
     }
 
     // ---------------------------------------------------------------------
@@ -624,5 +722,129 @@ class BillingProviderWebhookTest extends TestCase
             'status' => 'processed',
         ]);
         $this->assertSame(0, Subscription::query()->where('stripe_id', 'sub_test_does_not_exist')->count());
+    }
+
+    public function test_subscription_updated_rejects_a_downgrade_that_exceeds_seat_capacity(): void
+    {
+        $fake = $this->fakeBillingProvider();
+
+        // The business fits comfortably inside the current plan's seat allowance.
+        $current = Plan::factory()->create([
+            'max_employees' => 100,
+            'max_branches' => 10,
+            'stripe_monthly_price_id' => 'price_test_seatcap_current_monthly',
+        ]);
+        // The target plan only allows 2 seats.
+        $target = Plan::factory()->create([
+            'max_employees' => 2,
+            'max_branches' => 10,
+            'stripe_monthly_price_id' => 'price_test_seatcap_target_monthly',
+        ]);
+
+        $subscription = $this->makeSubscription([
+            'plan_id' => $current->id,
+            'billing_cycle' => 'monthly',
+            'stripe_price' => 'price_test_seatcap_current_monthly',
+        ]);
+
+        $company = $subscription->company;
+
+        // Create more active user seats than the target plan allows — the local
+        // subscription's owner plus three additional active accounts = 4 seats,
+        // which exceeds the target's max_employees of 2. This mirrors an
+        // account that must never be downgraded onto a smaller seat allowance.
+        User::factory()->count(3)->create(['company_id' => $company->id]);
+
+        $this->assertSame(
+            4,
+            User::query()->activeSeats($company->id)->count(),
+            'Precondition: the business must exceed the target seat allowance.',
+        );
+
+        $event = [
+            'id' => 'evt_sub_reconcile_seatcap_downgrade',
+            'type' => 'customer.subscription.updated',
+            'data' => [
+                'object' => [
+                    'id' => $subscription->stripe_id,
+                    'status' => 'active',
+                    'current_period_start' => now()->getTimestamp(),
+                    'current_period_end' => now()->addMonth()->getTimestamp(),
+                    'items' => [
+                        'data' => [
+                            ['id' => 'si_seatcap_1', 'price' => ['id' => 'price_test_seatcap_target_monthly']],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $this->postWebhook($event)->assertOk();
+
+        // The disallowed downgrade is never applied locally.
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $subscription->id,
+            'plan_id' => $current->id,
+            'billing_cycle' => 'monthly',
+            'stripe_price' => 'price_test_seatcap_current_monthly',
+        ]);
+
+        // The provider charge is rolled back to the plan the business fits
+        // inside (the plan recorded locally before the webhook arrived).
+        $this->assertCount(1, $fake->swaps, 'A roll-back swap to the current plan must be issued.');
+        $this->assertSame($current->id, $fake->swaps[0]['plan']->id);
+        $this->assertSame('monthly', $fake->swaps[0]['cycle']);
+    }
+
+    public function test_subscription_updated_allows_a_downgrade_when_seats_fit_the_target_allowance(): void
+    {
+        $fake = $this->fakeBillingProvider();
+
+        $current = Plan::factory()->create([
+            'max_employees' => 100,
+            'max_branches' => 10,
+            'stripe_monthly_price_id' => 'price_test_seatcap_ok_current_monthly',
+        ]);
+        $target = Plan::factory()->create([
+            'max_employees' => 5,
+            'max_branches' => 10,
+            'stripe_monthly_price_id' => 'price_test_seatcap_ok_target_monthly',
+        ]);
+
+        // Only the owner seat exists (1 seat) — comfortably under the target's
+        // allowance of 5, so the provider-confirmed downgrade must be applied.
+        $subscription = $this->makeSubscription([
+            'plan_id' => $current->id,
+            'billing_cycle' => 'monthly',
+            'stripe_price' => 'price_test_seatcap_ok_current_monthly',
+        ]);
+
+        $event = [
+            'id' => 'evt_sub_reconcile_seatcap_ok_downgrade',
+            'type' => 'customer.subscription.updated',
+            'data' => [
+                'object' => [
+                    'id' => $subscription->stripe_id,
+                    'status' => 'active',
+                    'items' => [
+                        'data' => [
+                            ['id' => 'si_seatcap_ok_1', 'price' => ['id' => 'price_test_seatcap_ok_target_monthly']],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+
+        $this->postWebhook($event)->assertOk();
+
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $subscription->id,
+            'plan_id' => $target->id,
+            'billing_cycle' => 'monthly',
+            'stripe_price' => 'price_test_seatcap_ok_target_monthly',
+        ]);
+
+        // A compliant downgrade needs no roll-back swap.
+        $this->assertCount(0, $fake->swaps);
     }
 }

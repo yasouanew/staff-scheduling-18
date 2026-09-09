@@ -47,8 +47,14 @@ class UpdateEmployeeRequest extends FormRequest
             'hire_date' => ['nullable', 'date'],
             'termination_date' => ['nullable', 'date', 'after_or_equal:hire_date'],
             'hourly_rate' => ['nullable', 'numeric', 'min:0', 'max:99999999.99'],
+            // The login role is edited alongside the profile. It lives on the
+            // linked `users` record, not the employee row, and is applied by
+            // EmployeeService::update() (see AssignRoleRequest for the rules).
+            'role' => ['sometimes', 'required', 'string', 'in:company_admin,scheduler,employee'],
             // Anything other than `active` revokes the person's access — see
-            // EmployeeService::syncAccountAccess().
+            // EmployeeService::syncAccountAccess(). Setting `active` is refused
+            // (INVITATION_PENDING) while the linked account is still `invited`;
+            // re-saving `pending` is a no-op for account access.
             'status' => ['nullable', 'string', 'in:active,pending,inactive,terminated'],
         ];
     }

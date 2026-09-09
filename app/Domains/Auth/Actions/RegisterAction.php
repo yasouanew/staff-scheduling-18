@@ -18,6 +18,14 @@ class RegisterAction
      * (with the `company_admin` role), and a fresh Sanctum token so the client
      * can be logged straight in after registering.
      *
+     * SEAT-CAPACITY EXEMPTION: this is the one user-activation path that is
+     * deliberately NOT routed through {@see \App\Services\SeatCapacityService}.
+     * A brand-new tenant has no entitled subscription or plan yet, so there is
+     * no seat allowance to enforce against — the founding `company_admin` is
+     * created active here and becomes the tenant's first (and only) seat. Every
+     * subsequent activation (directory re-activation, invite acceptance,
+     * reset-password promotion) IS guarded.
+     *
      * @param  array<string, mixed>  $data
      * @return array{user: User, token: string}
      */

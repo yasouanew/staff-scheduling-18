@@ -18,16 +18,25 @@ import { StatCard } from '@/Components/common/StatCard';
 import { StatusBadge } from '@/Components/common/StatusBadge';
 import { DataTable } from '@/Components/tables/DataTable';
 import { useBranchOptions } from '@/features/branches/hooks/useBranches';
+import { SeatUsageBadge } from '@/features/billing/components/SeatUsageBadge';
+import { UpgradePromptDialog } from '@/features/billing/components/UpgradePromptDialog';
+import { useSeatCapacity } from '@/features/billing/context/SeatCapacityContext';
 import { useDepartmentOptions } from '@/features/departments/hooks/useDepartments';
 import { normalizeWebRole, useWebSession } from '@/features/auth/hooks/useWebSession';
 import { cn } from '@/lib/utils';
-import { type Employee } from '@/types/employee';
+import { Badge } from '@/Components/ui/badge';
+import {
+    EMPLOYEE_ROLE_LABELS,
+    EMPLOYEE_ROLES,
+    type Employee,
+    type EmployeeRole,
+} from '@/types/employee';
 
 
 import { AddEmployeeModal } from '../components/AddEmployeeModal';
 import { EditEmployeeModal } from '../components/EditEmployeeModal';
 import { EmployeeRowActions } from '../components/EmployeeRowActions';
-import { RevokeInviteDialog } from '../components/RevokeInviteDialog';
+// import { RevokeInviteDialog } from '../components/RevokeInviteDialog'; // Revoke invite feature disabled
 import { SendInviteModal } from '../components/SendInviteModal';
 import { deriveEmployeeStats, useEmployees } from '../hooks/useEmployees';
 
@@ -38,6 +47,9 @@ const queryClient = new QueryClient({
 
 /** Sentinel value representing "no filter applied" in the select controls. */
 const ALL_VALUE = 'all';
+
+/** Sentinel value in the role filter for members with no login account yet. */
+const NO_LOGIN_ROLE = 'no-login';
 
 /** Derives up-to-two uppercase initials from a full name. */
 function getInitials(name: string): string {
@@ -67,6 +79,28 @@ function EmployeeAvatar({ employee }: { employee: Employee }): JSX.Element {
     );
 }
 
+/**
+ * Renders the access level of a member's login account.
+ *
+ * The role is `null` when no login account exists yet (an accountless directory
+ * row, e.g. a team member who has never been invited). Company Admin reads as
+ * the strongest tone, Scheduler informational, and Employee/`null` neutral.
+ */
+function RoleBadge({ role }: { role: EmployeeRole | null }): JSX.Element {
+    if (role === null) {
+        return (
+            <Badge variant="neutral" className="text-muted-foreground">
+                No login
+            </Badge>
+        );
+    }
+
+    const tone =
+        role === 'company_admin' ? 'primary' : role === 'scheduler' ? 'info' : 'neutral';
+
+    return <Badge variant={tone}>{EMPLOYEE_ROLE_LABELS[role]}</Badge>;
+}
+
 /** Shared select styling for the filter toolbar. */
 const selectClasses = cn(
     'h-10 w-full rounded-lg border border-input bg-card px-3 text-sm text-foreground sm:w-44',
@@ -77,7 +111,7 @@ const selectClasses = cn(
 interface EmployeeRowHandlers {
     onEdit: (employee: Employee) => void;
     onSendInvite: (employee: Employee) => void;
-    onRevokeInvite: (employee: Employee) => void;
+    // onRevokeInvite: (employee: Employee) => void; // Revoke invite feature disabled
 }
 
 /**
@@ -91,7 +125,7 @@ interface EmployeeRowHandlers {
 function buildColumns({
     onEdit,
     onSendInvite,
-    onRevokeInvite,
+    // onRevokeInvite, // Revoke invite feature disabled
     isEditable,
 }: EmployeeRowHandlers & { isEditable: boolean }): ColumnDef<Employee>[] {
     return [
@@ -133,6 +167,13 @@ function buildColumns({
             id: 'department',
             accessorKey: 'department',
             header: 'Department',
+            meta: { headerClassName: 'hidden md:table-cell', cellClassName: 'hidden md:table-cell' },
+        },
+        {
+            id: 'role',
+            accessorKey: 'role',
+            header: 'Role',
+            cell: ({ row }) => <RoleBadge role={row.original.role} />,
             meta: { headerClassName: 'hidden md:table-cell', cellClassName: 'hidden md:table-cell' },
         },
         {
@@ -211,11 +252,11 @@ function buildColumns({
                     enableSorting: false,
                     enableHiding: false,
                     cell: ({ row }: { row: { original: Employee } }) => (
+                        // Revoke invite feature disabled — onRevokeInvite prop removed.
                         <EmployeeRowActions
                             employee={row.original}
                             onEdit={onEdit}
                             onSendInvite={onSendInvite}
-                            onRevokeInvite={onRevokeInvite}
                         />
                     ),
                     meta: { headerClassName: 'w-12 text-right', cellClassName: 'text-right' },
@@ -230,8 +271,10 @@ function EmployeeDirectory(): JSX.Element {
     const [search, setSearch] = useState('');
     const [branchId, setBranchId] = useState<string>(ALL_VALUE);
     const [departmentId, setDepartmentId] = useState<string>(ALL_VALUE);
+    const [roleFilter, setRoleFilter] = useState<string>(ALL_VALUE);
 
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [upgradeOpen, setUpgradeOpen] = useState(false);
 
     /*
      * Row-menu dialogs are driven by the selected employee rather than a boolean
@@ -240,12 +283,16 @@ function EmployeeDirectory(): JSX.Element {
      */
     const [employeeToEdit, setEmployeeToEdit] = useState<Employee | null>(null);
     const [employeeToInvite, setEmployeeToInvite] = useState<Employee | null>(null);
-    const [employeeToRevoke, setEmployeeToRevoke] = useState<Employee | null>(null);
+    // const [employeeToRevoke, setEmployeeToRevoke] = useState<Employee | null>(null); // Revoke invite feature disabled
 
     // Schedulers can view the directory but only company admins can add, edit or
     // invite team members (the backend enforces `employee.create`/`employee.edit`).
     const session = useWebSession();
     const isCompanyAdmin = normalizeWebRole(session.data) === 'company_admin';
+
+    // Live active-user seat usage (backend-authoritative). Only available to
+    // company admins; other roles get the no-op context value.
+    const seatCapacity = useSeatCapacity();
 
     // Branch and department narrowing happen server-side; search stays client-side.
     const { data, isLoading, isError, refetch } = useEmployees({
@@ -270,9 +317,15 @@ function EmployeeDirectory(): JSX.Element {
                 employee.email.toLowerCase().includes(query) ||
                 employee.position.toLowerCase().includes(query);
 
-            return matchesSearch;
+            // `role` is `null` only when the member has no login account; the
+            // filter's sentinel option surfaces those rows alongside the roles.
+            const matchesRole =
+                roleFilter === ALL_VALUE ||
+                (roleFilter === NO_LOGIN_ROLE ? employee.role === null : employee.role === roleFilter);
+
+            return matchesSearch && matchesRole;
         });
-    }, [employees, search]);
+    }, [employees, search, roleFilter]);
 
 
     /** Name of the active branch filter, used for empty-state messaging. */
@@ -284,17 +337,17 @@ function EmployeeDirectory(): JSX.Element {
     // Stable identities keep the memoised column definitions from being rebuilt.
     const handleEdit = useCallback((employee: Employee) => setEmployeeToEdit(employee), []);
     const handleSendInvite = useCallback((employee: Employee) => setEmployeeToInvite(employee), []);
-    const handleRevokeInvite = useCallback((employee: Employee) => setEmployeeToRevoke(employee), []);
+    // const handleRevokeInvite = useCallback((employee: Employee) => setEmployeeToRevoke(employee), []); // Revoke invite feature disabled
 
     const columns = useMemo(
         () =>
             buildColumns({
                 onEdit: handleEdit,
                 onSendInvite: handleSendInvite,
-                onRevokeInvite: handleRevokeInvite,
+                // onRevokeInvite: handleRevokeInvite, // Revoke invite feature disabled
                 isEditable: isCompanyAdmin,
             }),
-        [handleEdit, handleSendInvite, handleRevokeInvite, isCompanyAdmin],
+        [handleEdit, handleSendInvite, isCompanyAdmin],
     );
 
     return (
@@ -310,17 +363,26 @@ function EmployeeDirectory(): JSX.Element {
                     </p>
                 </div>
                 {isCompanyAdmin ? (
-                    <button
-                        type="button"
-                        onClick={() => setIsModalOpen(true)}
-                        className={cn(
-                            'inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors',
-                            'hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-                        )}
-                    >
-                        <UserPlus className="h-4 w-4" aria-hidden="true" />
-                        Add employee
-                    </button>
+                    <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
+                        {seatCapacity.available ? (
+                            <SeatUsageBadge
+                                used={seatCapacity.seatsUsed}
+                                limit={seatCapacity.seatsLimit}
+                                isLoading={seatCapacity.isLoading}
+                            />
+                        ) : null}
+                        <button
+                            type="button"
+                            onClick={() => setIsModalOpen(true)}
+                            className={cn(
+                                'inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-sm transition-colors',
+                                'hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                            )}
+                        >
+                            <UserPlus className="h-4 w-4" aria-hidden="true" />
+                            Add employee
+                        </button>
+                    </div>
                 ) : null}
             </div>
 
@@ -434,6 +496,21 @@ function EmployeeDirectory(): JSX.Element {
                                 ))}
                             </select>
 
+                            <select
+                                value={roleFilter}
+                                onChange={(event) => setRoleFilter(event.target.value)}
+                                aria-label="Filter by role"
+                                className={cn(selectClasses)}
+                            >
+                                <option value={ALL_VALUE}>All roles</option>
+                                {EMPLOYEE_ROLES.map((option) => (
+                                    <option key={option} value={option}>
+                                        {EMPLOYEE_ROLE_LABELS[option]}
+                                    </option>
+                                ))}
+                                <option value={NO_LOGIN_ROLE}>No login</option>
+                            </select>
+
                         </div>
                     </div>
 
@@ -476,11 +553,26 @@ function EmployeeDirectory(): JSX.Element {
                     if (!open) setEmployeeToInvite(null);
                 }}
             />
+            {/* Revoke invite feature disabled.
             <RevokeInviteDialog
                 employee={employeeToRevoke}
                 onOpenChange={(open) => {
                     if (!open) setEmployeeToRevoke(null);
                 }}
+            />
+            */}
+
+            {/* Upgrade prompt surfaced when the active-user limit blocks a seat
+                consuming action (re-activating a member, etc.). */}
+            <UpgradePromptDialog
+                open={upgradeOpen}
+                seatsNeeded={
+                    seatCapacity.seatsLimit !== null
+                        ? seatCapacity.seatsUsed + 1
+                        : 1
+                }
+                selectedCycle="monthly"
+                onOpenChange={setUpgradeOpen}
             />
         </div>
     );

@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Shift;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class StoreShiftRequest extends FormRequest
 {
@@ -27,7 +28,11 @@ class StoreShiftRequest extends FormRequest
             'company_id' => ['nullable', 'integer', 'exists:companies,id'],
             'branch_id' => ['nullable', 'integer', 'exists:branches,id'],
             'roster_id' => ['required', 'integer', 'exists:rosters,id'],
-            'employee_id' => ['nullable', 'integer', 'exists:employees,id'],
+            'employee_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('employees', 'id')->where('status', 'active'),
+            ],
             'position_id' => ['nullable', 'integer', 'exists:positions,id'],
             'department_id' => ['nullable', 'integer', 'exists:departments,id'],
             'date' => ['required', 'date'],

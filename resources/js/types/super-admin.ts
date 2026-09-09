@@ -43,6 +43,7 @@ export interface PlatformOverviewDto {
         total_companies: number;
         active_companies: number;
         total_employees: number;
+        total_active_seats: number;
         active_subscriptions: number;
     };
     plan_distribution: PlanDistributionDto[];
@@ -54,6 +55,8 @@ export interface PlatformStats {
     totalCompanies: number;
     activeCompanies: number;
     totalEmployees: number;
+    /** Active non-super-admin user accounts across the platform (seats). */
+    totalActiveSeats: number;
     activeSubscriptions: number;
 }
 
@@ -135,6 +138,8 @@ export interface PlatformSubscriptionDto {
     plan: { id: number; name: string; slug: string } | null;
     plan_name: string | null;
     active_branches_count: number;
+    seats_used: number;
+    seats_limit: number | null;
     created_at: string | null;
     updated_at: string | null;
 }
@@ -157,6 +162,9 @@ export interface PlatformSubscription {
     trialEndsAt: string | null;
     cancelledAt: string | null;
     activeBranchesCount: number;
+    seatsUsed: number;
+    seatsLimit: number | null;
+    quantity: number | null;
     createdAt: string | null;
 }
 

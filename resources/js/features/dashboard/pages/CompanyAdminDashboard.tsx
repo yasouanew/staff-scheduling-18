@@ -13,7 +13,6 @@ import { Link } from 'react-router-dom';
 
 import { LoadingSkeleton } from '@/Components/common/LoadingSkeleton';
 import { StatCard } from '@/Components/common/StatCard';
-import { BranchUsageCard } from '@/features/billing/components/BranchUsageCard';
 import { useUsageOverview } from '@/features/billing/hooks/useSubscription';
 
 import { DepartmentAllocationChart } from '../components/DepartmentAllocationChart';
@@ -52,10 +51,10 @@ function DashboardContent(): JSX.Element {
     const allocation = data?.departmentAllocation;
     const totalShifts = allocation?.totalShifts ?? 0;
 
-    const branchUsage = usageQuery.data?.branchesUsage ?? [];
-    const branchLimit = usageQuery.data?.branches.limit ?? null;
-    const branchUsed = usageQuery.data?.branches.used ?? 0;
-    const branchLimitReached = branchLimit !== null && branchUsed >= branchLimit;
+    // Billable per-seat usage: one seat = one active non-super-admin user.
+    const seatUsed = usageQuery.data?.seats?.used ?? 0;
+    const seatLimit = usageQuery.data?.seats?.limit ?? null;
+    const seatFull = seatLimit !== null && seatUsed >= seatLimit;
 
     return (
         <div className="space-y-6">
@@ -189,39 +188,14 @@ function DashboardContent(): JSX.Element {
 
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <StatCard
-                        title="Active Branches"
-                        value={branchLimit === null ? branchUsed : `${branchUsed} / ${branchLimit}`}
-                        icon={Building2}
-                        tone="primary"
-                        description={branchLimit === null ? 'Unlimited plan allowance' : 'Branch allowance used'}
-                        isLoading={usageQuery.isLoading}
-                    />
-                    <StatCard
-                        title="Entitled Employees"
-                        value={branchUsage.reduce((sum, branch) => sum + branch.employeesUsed, 0)}
-                        icon={UserCheck}
-                        tone="success"
-                        description="Across active branches"
+                        title="Active users (seats)"
+                        value={seatLimit === null ? String(seatUsed) : `${seatUsed} / ${seatLimit}`}
+                        icon={Users}
+                        tone={seatFull ? 'danger' : 'primary'}
+                        description={seatLimit === null ? 'Unlimited on your plan' : 'Billable active user accounts'}
                         isLoading={usageQuery.isLoading}
                     />
                 </div>
-
-                {branchUsage.length > 0 && (
-                    <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                        {branchUsage.slice(0, 4).map((branch) => (
-                            <BranchUsageCard
-                                key={branch.id}
-                                branch={branch}
-                                suggestedMax={null}
-                                canManage={false}
-                                branchLimitReached={branchLimitReached}
-                                isActivating={false}
-                                onActivate={() => undefined}
-                                onIncreaseCapacity={() => undefined}
-                            />
-                        ))}
-                    </div>
-                )}
             </section>
         </div>
     );

@@ -26,6 +26,10 @@ class PlanResource extends JsonResource
             'stripe_yearly_price_id' => $this->stripe_yearly_price_id,
             'stripe_product_id' => $this->stripe_product_id,
             'max_employees' => $this->max_employees,
+            // The seat cap reuses `max_employees` (null = unlimited). Exposed as
+            // a derived alias so every surface can display the billable seat
+            // allowance consistently with the authenticated subscription surface.
+            'max_seats' => $this->maxSeats(),
             'max_branches' => $this->max_branches,
             'features' => $this->features ?? [],
             'is_active' => $this->is_active,

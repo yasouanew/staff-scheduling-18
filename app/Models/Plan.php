@@ -81,6 +81,28 @@ class Plan extends Model
     }
 
     /**
+     * The maximum number of active user seats the plan allows, or null when
+     * unlimited.
+     *
+     * The per-seat model is flat-rate and user-account based: a "seat" is one
+     * active user account (any non-super_admin role) in the company, whether or
+     * not that user has an employee profile. The plan's `max_employees` column
+     * is reused as the seat cap so no schema change is required.
+     */
+    public function maxSeats(): ?int
+    {
+        return $this->max_employees !== null ? (int) $this->max_employees : null;
+    }
+
+    /**
+     * Check if the plan allows an unlimited number of active user seats.
+     */
+    public function hasUnlimitedSeats(): bool
+    {
+        return $this->maxSeats() === null;
+    }
+
+    /**
      * Get the subscriptions using this plan.
      */
     public function subscriptions(): \Illuminate\Database\Eloquent\Relations\HasMany

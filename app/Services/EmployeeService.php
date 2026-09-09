@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\InvitationPendingException;
 use App\Models\Employee;
 use App\Models\User;
 use App\Notifications\EmployeeInvitationNotification;
@@ -16,6 +17,7 @@ class EmployeeService
 {
     public function __construct(
         private BranchSubscriptionService $branchSubscriptions,
+        private SeatCapacityService $seats,
     ) {}
 
     /**
@@ -73,13 +75,45 @@ class EmployeeService
      *
      * A status change is not merely a label: an employee who is no longer
      * `active` must lose access straight away, so the linked login account is
-     * synchronised in the same transaction as the profile edit.
+     * synchronised in the same transaction as the profile edit. A role change is
+     * applied to the linked `users` row in the same transaction, because the
+     * role lives on the login account, not the employee profile.
+     *
+     * Setting a member `active` is refused while their linked account is still
+     * `invited` (InvitationPendingException): only accepting the invitation
+     * activates the account, and with it the held `pending` row. Re-saving a
+     * `pending` member (the edit dialog always re-submits the current status)
+     * leaves their account and outstanding invitation untouched.
      *
      * @param  array<string, mixed>  $data
+     *
+     * @throws \App\Exceptions\InvitationPendingException when an invited
+     *         account's row is set to `active`
      */
     public function update(Employee $employee, array $data): Employee
     {
         return DB::transaction(function () use ($employee, $data) {
+            // The employment status of a member who is still awaiting
+            // acceptance (`pending`) is locked: from this state the only way
+            // forward is the invitee accepting their invitation (which flips
+            // both the account and the row to `active`). An administrator
+            // changing it by hand — even to `inactive` — would either bypass
+            // the acceptance-only activation rule or strand the outstanding
+            // invitation, so every status change away from `pending` is
+            // refused. Re-submitting `pending` (profile edits) stays a no-op,
+            // handled by syncAccountAccess() below.
+            $wasPending = $employee->status === 'pending';
+
+            $requestedStatus = $data['status'] ?? null;
+
+            if ($wasPending && $requestedStatus !== null && $requestedStatus !== 'pending') {
+                throw new InvitationPendingException(
+                    $requestedStatus === 'active'
+                        ? "This member hasn't accepted their invitation yet. They become Active automatically once they accept."
+                        : "This member is still awaiting their invitation, so their employment status can't be changed yet. Wait for them to accept, or revoke their invitation."
+                );
+            }
+
             if (isset($data['photo']) && $data['photo'] instanceof UploadedFile) {
                 $data['photo'] = $this->storePhoto($data['photo']);
             }
@@ -94,7 +128,17 @@ class EmployeeService
                 $this->assertCapacityForAssignment($employee->company_id, $data['branch_id']);
             }
 
+            // The role is not a column on the employee row — it belongs to the
+            // linked user account — so pull it out before the fillable update
+            // (which would otherwise silently ignore it) and apply it there.
+            $role = array_key_exists('role', $data) ? $data['role'] : null;
+            unset($data['role']);
+
             $employee->update($data);
+
+            if ($role !== null && $employee->user !== null) {
+                $this->applyRoleToUser($employee->user, $role);
+            }
 
             if (array_key_exists('status', $data)) {
                 $this->syncAccountAccess($employee->refresh());
@@ -124,10 +168,15 @@ class EmployeeService
      *  - Push tokens are deactivated, so a locked-out device stops receiving
      *    roster notifications.
      *
-     * Re-activating restores sign-in for anyone who has already chosen a
-     * password. Accounts still awaiting their first password stay `invited`,
-     * because activating them here would leave an account whose password is the
-     * random placeholder from the invitation.
+     * Activating means *reactivating a real login*: the linked user must already
+     * be `active` (a no-op re-save) or have chosen a password before (an
+     * `inactive` account flipped back to `active` re-takes a seat, so it passes
+     * the seat guard). A still-`invited` account has never chosen a password —
+     * it consumes no seat and must stay out of the active counts — so an admin
+     * cannot hand-flip its directory row to `active` ahead of acceptance. Only
+     * acceptance (web set-password link / mobile code / reset-password) promotes
+     * the account and the held `pending` row to `active`, and the seat guard
+     * runs there.
      */
     public function syncAccountAccess(Employee $employee): void
     {
@@ -138,11 +187,37 @@ class EmployeeService
         }
 
         if ($employee->status === 'active') {
-            // Never resurrect an account that has not set a password yet.
-            if ($user->status !== 'invited') {
-                $user->forceFill(['status' => 'active'])->save();
+            // A seat is an *active user account*, so being an `active` member
+            // requires a real accepted login. An `invited` account is exactly
+            // the directory-vs-seat mismatch this model eliminates (shows as
+            // Active while consuming no seat), so refuse the hand-flip rather
+            // than running the capacity guard: there is no seat to take yet,
+            // and acceptance is the only legitimate activation path.
+            if ($user->status === 'invited') {
+                throw new InvitationPendingException();
             }
 
+            // Reactivating a deactivated member who already chose a password
+            // re-takes a seat, so it must pass the guard (excluding the user
+            // being activated, so the same account never self-blocks). Re-saving
+            // someone who is already active is a no-op and never consumes one.
+            if ($user->status !== 'active') {
+                $this->seats->assertCanActivateUser($employee->company, $user);
+            }
+
+            $user->forceFill(['status' => 'active'])->save();
+
+            return;
+        }
+
+        // A member still awaiting acceptance (`pending` row linked to an
+        // `invited` account) has an outstanding invitation that must stay alive
+        // so they can accept it. Re-saving a pending member's profile — the edit
+        // dialog always re-submits the current `pending` status — is therefore a
+        // no-op for account access: never deactivate the account or revoke the
+        // invitation. (Moving the row to `inactive`/`terminated` is a real
+        // deactivation and falls through to the revocation below.)
+        if ($employee->status === 'pending' && $user->status === 'invited') {
             return;
         }
 
@@ -162,13 +237,33 @@ class EmployeeService
 
 
     /**
-     * Delete an employee record.
+     * Delete an employee record and free its seat.
+     *
+     * Deleting a directory member must not leave an orphaned active login
+     * behind — that would keep consuming a seat while the person is gone. If a
+     * linked user exists it is deactivated (status inactive, all credentials
+     * revoked) in the same transaction so the seat is freed immediately.
      */
     public function delete(Employee $employee): bool
     {
         return DB::transaction(function () use ($employee) {
             if ($employee->photo) {
                 Storage::disk('public')->delete($employee->photo);
+            }
+
+            $user = $employee->user;
+
+            if ($user !== null) {
+                $user->forceFill(['status' => 'inactive'])->save();
+
+                // Kill every way the person could still authenticate, mirroring
+                // syncAccountAccess()'s deactivation branch so the seat is freed
+                // and the account is not left half-open.
+                $user->tokens()->delete();
+
+                DB::table('password_reset_tokens')->where('email', $user->email)->delete();
+
+                $user->deviceTokens()->update(['is_active' => false]);
             }
 
             return (bool) $employee->delete();
@@ -179,6 +274,14 @@ class EmployeeService
      * Invite a new employee: create a linked user account, assign a role,
      * create the employee profile, and email an invitation to set a password.
      *
+     * The invitee is always emailed and their login account is created
+     * `invited` (no seat consumed). To keep the directory aligned with seats,
+     * the employee row always starts `pending` too — it is not schedulable and
+     * is not counted as an active member until the invitee actually accepts
+     * (sets their password), at which point acceptance flips both the login
+     * account and the employee row to `active` (the seat guard runs there).
+     * Only a real active login therefore shows as Active and consumes a seat.
+     *
      * @param  array<string, mixed>  $data
      */
     public function invite(array $data): Employee
@@ -186,6 +289,17 @@ class EmployeeService
         return DB::transaction(function () use ($data) {
             // Assigning to a branch consumes that branch's employee capacity.
             $this->assertCapacityForAssignment($data['company_id'] ?? null, $data['branch_id'] ?? null);
+
+            // Refuse sending an invitation email while the plan is already at
+            // its seat limit: the invitee could not activate until a seat
+            // frees up, so guide the admin to upgrade or deactivate another
+            // member before an un-actionable email goes out. The invitation
+            // itself consumes no seat — this gate exists so we never email a
+            // person who is guaranteed to be stuck at acceptance.
+            $company = \App\Models\Company::find($data['company_id']);
+            if ($company !== null) {
+                $this->seats->assertCanSendInvitation($company);
+            }
 
             $user = User::create([
                 'company_id' => $data['company_id'],
@@ -200,6 +314,11 @@ class EmployeeService
 
             $user->assignRole($data['role']);
 
+            // The invitation has not been accepted yet, so the employee is
+            // always held `pending` (not schedulable, not an active member).
+            // Accepting the invitation promotes both the login account and
+            // this row to `active` — at which point the seat guard applies.
+
             $employee = Employee::create([
                 'company_id' => $data['company_id'],
                 'user_id' => $user->id,
@@ -210,7 +329,7 @@ class EmployeeService
                 'last_name' => $data['last_name'],
                 'employment_type' => $data['employment_type'] ?? 'full_time',
                 'hourly_rate' => $data['hourly_rate'] ?? null,
-                'status' => 'active',
+                'status' => 'pending',
             ]);
 
             $this->sendInvitation($user, $data['company_name'] ?? null);
@@ -231,17 +350,32 @@ class EmployeeService
 
     /**
      * Assign a role to the employee's linked user account.
+     *
+     * Kept as a dedicated endpoint so callers that only change the role (the
+     * row menu's "change role" flow) do not need to submit the whole profile.
      */
     public function assignRole(Employee $employee, string $role): Employee
     {
         return DB::transaction(function () use ($employee, $role) {
             if ($employee->user) {
-                $employee->user->syncRoles([$role]);
-                $employee->user->update(['role' => $role]);
+                $this->applyRoleToUser($employee->user, $role);
             }
 
             return $employee->load('user');
         });
+    }
+
+    /**
+     * Persist a role on a linked user account.
+     *
+     * The Spatie role (gate/permission checks) and the `users.role` column
+     * (used for lightweight navigation decisions and the directory's badge)
+     * must never drift, so both are written together.
+     */
+    protected function applyRoleToUser(User $user, string $role): void
+    {
+        $user->syncRoles([$role]);
+        $user->update(['role' => $role]);
     }
 
     /**

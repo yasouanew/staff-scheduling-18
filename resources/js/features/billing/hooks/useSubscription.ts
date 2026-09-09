@@ -8,6 +8,7 @@ import type { BillingPage, BillingPayment } from '@/types/billing';
 import type {
     BillingCycle,
     ManagementPlan,
+    PlanChangeEstimate,
     SubscriptionSummary,
     UsageOverview,
 } from '../types';
@@ -53,6 +54,7 @@ interface PlanDto {
     interval: BillingCycle[];
     max_branches: number | null;
     max_employees: number | null;
+    max_seats?: number | null;
     features: unknown;
 }
 
@@ -67,6 +69,7 @@ interface PlanSummaryDto {
     interval: BillingCycle;
     max_branches: number | null;
     max_employees: number | null;
+    max_seats?: number | null;
 }
 
 interface SubscriptionDto {
@@ -81,6 +84,18 @@ interface SubscriptionDto {
     ends_at: string | null;
     renews_at: string | null;
     cancelled_at: string | null;
+}
+
+/** One previous/present subscription record from the summary payload. */
+interface SubscriptionHistoryDto {
+    id: number;
+    status: string;
+    billing_cycle: BillingCycle;
+    plan_name: string | null;
+    starts_at: string | null;
+    ends_at: string | null;
+    cancelled_at: string | null;
+    is_current: boolean;
 }
 
 interface TrialDto {
@@ -100,6 +115,7 @@ interface BranchUsageDto {
 }
 
 interface UsageDto {
+    seats?: { used: number; limit: number | null };
     branches: { used: number; limit: number | null };
     branch_usage?: BranchUsageDto[];
     branches_usage?: BranchUsageDto[];
@@ -113,16 +129,26 @@ interface FeatureDto {
     limit: number | null;
 }
 
+interface PlanChangeDto {
+    amount_due: number | string;
+    currency: string;
+    renews_at: string | null;
+    elapsed: number | null;
+}
+
 interface SubscriptionSummaryDto {
     plan: PlanSummaryDto | null;
     subscription: SubscriptionDto | null;
     trial: TrialDto | null;
     usage: UsageDto;
     features: FeatureDto[];
+    plan_change?: PlanChangeDto | null;
     entitled: boolean;
+    subscription_history?: SubscriptionHistoryDto[];
 }
 
 interface UsageOverviewDto {
+    seats: { used: number; limit: number | null };
     branches: { used: number; limit: number | null };
     branches_usage: BranchUsageDto[];
 }
@@ -146,6 +172,9 @@ function mapPlan(dto: PlanDto): ManagementPlan {
         interval: Array.isArray(dto.interval) ? dto.interval : ['monthly', 'six_month', 'yearly'],
         maxBranches: dto.max_branches,
         maxEmployees: dto.max_employees,
+        // The seat cap reuses `max_employees`; prefer the explicit `max_seats`
+        // field when the backend supplies it, otherwise fall back to employees.
+        maxSeats: dto.max_seats !== undefined ? dto.max_seats : dto.max_employees,
         features: normalizeFeatureList(dto.features),
     };
 }
@@ -163,6 +192,7 @@ function mapPlanSummary(dto: PlanSummaryDto | null): SubscriptionSummary['plan']
         interval: dto.interval,
         maxBranches: dto.max_branches,
         maxEmployees: dto.max_employees,
+        maxSeats: dto.max_seats !== undefined ? dto.max_seats : dto.max_employees,
     };
 }
 
@@ -182,6 +212,10 @@ function mapBranchUsage(dto: BranchUsageDto) {
 function mapUsage(dto: UsageDto): SubscriptionSummary['usage'] {
     const branchUsage = dto.branch_usage ?? dto.branches_usage ?? [];
     return {
+        seats: {
+            used: number(dto.seats?.used),
+            limit: dto.seats?.limit ?? null,
+        },
         branches: {
             used: number(dto.branches.used),
             limit: dto.branches.limit,
@@ -208,6 +242,16 @@ function mapSummary(dto: SubscriptionSummaryDto): SubscriptionSummary {
                 cancelledAt: dto.subscription.cancelled_at,
             }
             : null,
+        subscriptionHistory: (dto.subscription_history ?? []).map((record) => ({
+            id: String(record.id),
+            status: record.status,
+            billingCycle: record.billing_cycle,
+            planName: record.plan_name,
+            startsAt: record.starts_at,
+            endsAt: record.ends_at,
+            cancelledAt: record.cancelled_at,
+            isCurrent: record.is_current,
+        })),
         trial: dto.trial
             ? {
                 active: dto.trial.active,
@@ -222,6 +266,12 @@ function mapSummary(dto: SubscriptionSummaryDto): SubscriptionSummary {
             enabled: feature.enabled,
             limit: feature.limit,
         })),
+        planChange: {
+            amountDue: number(dto.plan_change?.amount_due),
+            currency: dto.plan_change?.currency || dto.plan?.currency || 'AUD',
+            renewsAt: dto.plan_change?.renews_at ?? dto.subscription?.renews_at ?? null,
+            elapsed: dto.plan_change?.elapsed ?? null,
+        },
         entitled: dto.entitled,
     };
 }
@@ -241,6 +291,14 @@ interface SubscriptionPaymentDto {
     paid_at: string | null;
     refunded_at: string | null;
     created_at: string;
+    subscription?: {
+        id: number;
+        status: string;
+        billing_cycle: BillingCycle;
+        starts_at: string | null;
+        ends_at: string | null;
+        cancelled_at: string | null;
+    } | null;
 }
 
 interface BillingPortalDto {
@@ -269,6 +327,16 @@ function mapPayment(dto: SubscriptionPaymentDto): BillingPayment {
         refundedAt: dto.refunded_at,
         isRefundable: dto.is_refundable,
         isRefunded: dto.is_refunded,
+        subscription: dto.subscription
+            ? {
+                id: String(dto.subscription.id),
+                status: dto.subscription.status,
+                billingCycle: dto.subscription.billing_cycle,
+                startsAt: dto.subscription.starts_at,
+                endsAt: dto.subscription.ends_at,
+                cancelledAt: dto.subscription.cancelled_at,
+            }
+            : null,
     };
 }
 
@@ -301,6 +369,10 @@ async function fetchPlans(): Promise<ManagementPlan[]> {
 async function fetchUsage(): Promise<UsageOverview> {
     const response = await apiClient.get<ApiSuccessResponse<UsageOverviewDto>>('/subscription/usage');
     return {
+        seats: {
+            used: number(response.data.data.seats.used),
+            limit: response.data.data.seats.limit,
+        },
         branches: {
             used: number(response.data.data.branches.used),
             limit: response.data.data.branches.limit,
@@ -309,17 +381,82 @@ async function fetchUsage(): Promise<UsageOverview> {
     };
 }
 
+/**
+ * GET /subscription/plan-change — server-computed proration estimate for
+ * switching to a selected plan/cycle. `amount_due` is the "rest of the money"
+ * to top up to the target plan for the current period (negative = credit back
+ * on a downgrade); `renews_at` mirrors the subscription's `ends_at` (a plan
+ * switch never changes the renewal date).
+ */
+async function fetchPlanChangeEstimate(
+    planId: string,
+    billingCycle?: BillingCycle,
+): Promise<PlanChangeEstimate> {
+    const response = await apiClient.get<ApiSuccessResponse<PlanChangeDto>>('/subscription/plan-change', {
+        params: { plan_id: Number(planId), billing_cycle: billingCycle },
+    });
+    return {
+        amountDue: number(response.data.data.amount_due),
+        currency: response.data.data.currency,
+        renewsAt: response.data.data.renews_at,
+        elapsed: response.data.data.elapsed,
+    };
+}
+
+/** Result of a plan-change mutation (upgrade / downgrade). */
+export interface PlanChangeResult {
+    /** The (possibly unchanged) subscription summary after the request. */
+    subscription: SubscriptionSummary;
+    /** Whether the plan was actually switched on the server. */
+    planChanged: boolean;
+    /** Immediate proration charge for an upgrade (rest of the money). */
+    charge: { amount: number; currency: string; reference: string | null; payment_intent: string | null } | null;
+    /** Cash refund issued for a downgrade (prorated difference). */
+    refund: { amount: number; currency: string; refund_id: string | null } | null;
+    /** Hosted Checkout URL when the upgrade must be paid first (no card on file). */
+    checkoutUrl: string | null;
+}
+
 /** POST /subscription/upgrade or /downgrade — change the active plan. */
 async function changePlan(
     endpoint: 'upgrade' | 'downgrade',
     planId: string,
     billingCycle?: BillingCycle,
-): Promise<SubscriptionSummary> {
-    const response = await apiClient.post<ApiSuccessResponse<SubscriptionSummaryDto>>(
+): Promise<PlanChangeResult> {
+    const response = await apiClient.post<ApiSuccessResponse<Record<string, unknown>>>(
         `/subscription/${endpoint}`,
         { plan_id: Number(planId), billing_cycle: billingCycle },
     );
-    return mapSummary(response.data.data);
+
+    const data = response.data.data as {
+        subscription?: unknown;
+        plan_changed?: boolean;
+        charge?: PlanChangeResult['charge'];
+        refund?: PlanChangeResult['refund'];
+        checkout_url?: string | null;
+        // Legacy shape: the bare subscription summary.
+        plan?: unknown;
+    };
+
+    // New envelope: { subscription, plan_changed, charge, refund, checkout_url }.
+    if (data && typeof data === 'object' && 'subscription' in data && data.subscription) {
+        return {
+            subscription: mapSummary(data.subscription as SubscriptionSummaryDto),
+            planChanged: Boolean(data.plan_changed),
+            charge: data.charge ?? null,
+            refund: data.refund ?? null,
+            checkoutUrl: data.checkout_url ?? null,
+        };
+    }
+
+    // Legacy shape (bare summary) for backwards compatibility.
+    return {
+        subscription: mapSummary(response.data.data as unknown as SubscriptionSummaryDto),
+        planChanged: true,
+        charge: null,
+        refund: null,
+        checkoutUrl: null,
+    };
 }
 
 /** GET /subscription/payments — paginated payment history for the entitled subscription. */
@@ -353,6 +490,24 @@ async function startCheckout(planId: string, billingCycle: BillingCycle): Promis
         billing_cycle: billingCycle,
     });
     return response.data.data.checkout_url;
+}
+
+/**
+ * POST /subscription/checkout/retry — resumes an abandoned checkout attempt:
+ * closes the stale `incomplete` row and opens a fresh Stripe session for the
+ * same plan/cycle. Returns the new hosted-checkout URL.
+ */
+async function retryCheckout(): Promise<string> {
+    const response = await apiClient.post<ApiSuccessResponse<CheckoutDto>>('/subscription/checkout/retry');
+    return response.data.data.checkout_url;
+}
+
+/** POST /subscription/checkout/discard — abandons the pending `incomplete` attempt. */
+async function discardIncompleteCheckout(): Promise<SubscriptionSummary> {
+    const response = await apiClient.post<ApiSuccessResponse<SubscriptionSummaryDto>>(
+        '/subscription/checkout/discard',
+    );
+    return mapSummary(response.data.data);
 }
 
 /**
@@ -420,6 +575,23 @@ export function useUsageOverview(): UseQueryResult<UsageOverview, Error> {
     });
 }
 
+/**
+ * Reads the server-computed proration estimate for switching to a given
+ * plan/cycle (GET /subscription/plan-change). The estimate is informational —
+ * the billing provider remains authoritative for the final charge.
+ */
+export function usePlanChangeEstimate(
+    planId: string | null,
+    billingCycle?: BillingCycle,
+): UseQueryResult<PlanChangeEstimate, Error> {
+    return useQuery<PlanChangeEstimate, Error>({
+        queryKey: ['billing', 'management', 'plan-change', planId, billingCycle],
+        queryFn: () => fetchPlanChangeEstimate(planId ?? '', billingCycle),
+        enabled: planId !== null && planId !== '',
+        staleTime: 30_000,
+    });
+}
+
 /** Reads the paginated payment history (GET /subscription/payments). */
 export function useSubscriptionPayments(pageNumber = 1): UseQueryResult<BillingPage<BillingPayment>, Error> {
     return useQuery<BillingPage<BillingPayment>, Error>({
@@ -446,34 +618,41 @@ export function useSubscriptionInvoices(pageNumber = 1): UseQueryResult<BillingP
 
 /** Upgrades the subscription to a larger/equal plan and refreshes billing caches. */
 export function useUpgradeSubscription(): UseMutationResult<
-    SubscriptionSummary,
+    PlanChangeResult,
     Error,
     { planId: string; billingCycle?: BillingCycle }
 > {
     const queryClient = useQueryClient();
 
-    return useMutation<SubscriptionSummary, Error, { planId: string; billingCycle?: BillingCycle }>({
+    return useMutation<PlanChangeResult, Error, { planId: string; billingCycle?: BillingCycle }>({
         mutationFn: ({ planId, billingCycle }) => changePlan('upgrade', planId, billingCycle),
-        onSuccess: (summary) => {
+        onSuccess: (result) => {
             void queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.all });
-            queryClient.setQueryData(SUBSCRIPTION_KEYS.summary, summary);
+            queryClient.setQueryData(SUBSCRIPTION_KEYS.summary, result.subscription);
+
+            // No default payment method on file: the prorated "rest of the
+            // money" must be paid through hosted Checkout before the plan is
+            // applied — forward the admin to the payment gateway.
+            if (result.checkoutUrl) {
+                window.location.assign(result.checkoutUrl);
+            }
         },
     });
 }
 
 /** Downgrades the subscription to a smaller plan and refreshes billing caches. */
 export function useDowngradeSubscription(): UseMutationResult<
-    SubscriptionSummary,
+    PlanChangeResult,
     Error,
     { planId: string; billingCycle?: BillingCycle }
 > {
     const queryClient = useQueryClient();
 
-    return useMutation<SubscriptionSummary, Error, { planId: string; billingCycle?: BillingCycle }>({
+    return useMutation<PlanChangeResult, Error, { planId: string; billingCycle?: BillingCycle }>({
         mutationFn: ({ planId, billingCycle }) => changePlan('downgrade', planId, billingCycle),
-        onSuccess: (summary) => {
+        onSuccess: (result) => {
             void queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.all });
-            queryClient.setQueryData(SUBSCRIPTION_KEYS.summary, summary);
+            queryClient.setQueryData(SUBSCRIPTION_KEYS.summary, result.subscription);
         },
     });
 }
@@ -540,6 +719,34 @@ export function useChangeBillingPeriod(): UseMutationResult<SubscriptionSummary,
 
     return useMutation<SubscriptionSummary, Error, BillingCycle>({
         mutationFn: (cycle) => changeBillingPeriod(cycle),
+        onSuccess: (summary) => {
+            void queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.all });
+            queryClient.setQueryData(SUBSCRIPTION_KEYS.summary, summary);
+        },
+    });
+}
+
+/**
+ * Resumes an abandoned checkout attempt and returns the new Stripe Checkout
+ * URL to redirect to. Refreshes billing caches when the caller comes back.
+ */
+export function useRetryCheckout(): UseMutationResult<string, Error, void> {
+    const queryClient = useQueryClient();
+
+    return useMutation<string, Error, void>({
+        mutationFn: () => retryCheckout(),
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.all });
+        },
+    });
+}
+
+/** Discards the pending `incomplete` checkout attempt and refreshes billing caches. */
+export function useDiscardIncompleteCheckout(): UseMutationResult<SubscriptionSummary, Error, void> {
+    const queryClient = useQueryClient();
+
+    return useMutation<SubscriptionSummary, Error, void>({
+        mutationFn: () => discardIncompleteCheckout(),
         onSuccess: (summary) => {
             void queryClient.invalidateQueries({ queryKey: SUBSCRIPTION_KEYS.all });
             queryClient.setQueryData(SUBSCRIPTION_KEYS.summary, summary);

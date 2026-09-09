@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 
 import { DashboardLayout } from '@/Components/layout/DashboardLayout';
 import { PlaceholderPage } from '@/Components/common/PlaceholderPage';
+import { SeatCapacityProvider } from '@/features/billing/context/SeatCapacityContext';
 import { apiClient, getApiErrorMessage } from '@/lib/api-client';
 import { useAuth } from '@/features/auth/hooks/useAuth';
 import { WEB_SESSION_KEY } from '@/features/auth/hooks/useWebSession';
@@ -41,7 +42,8 @@ import RosterCalendarPage from '@/features/rosters/pages/RosterCalendarPage';
 import RostersListPage from '@/features/rosters/pages/RostersListPage';
 import RosterDetailPage from '@/features/rosters/pages/RosterDetailPage';
 import ShiftsListPage from '@/features/shifts/pages/ShiftsListPage';
-import ShiftTemplatesListPage from '@/features/shift-templates/pages/ShiftTemplatesListPage';
+// Disabled: /shift-templates page is hidden until the feature is re-enabled.
+// import ShiftTemplatesListPage from '@/features/shift-templates/pages/ShiftTemplatesListPage';
 import LeaveTypesPage from '@/features/leave-types/pages/LeaveTypesPage';
 import LeaveRequestsListPage from '@/features/leave-requests/pages/LeaveRequestsListPage';
 import LeaveRequestNewPage from '@/features/leave-requests/pages/LeaveRequestNewPage';
@@ -297,7 +299,15 @@ function ProtectedLayout(): JSX.Element {
         navigate('/login', { replace: true });
     };
 
-    return <DashboardLayout onSignOut={handleSignOut} />;
+    // SeatCapacityProvider feeds live active-user seat usage to every page in the
+    // authenticated shell. It is role-aware (company_admin only) and mounted above
+    // DashboardLayout so the Dashboard, Employee Directory and Subscription page
+    // all share one app-global usage query cache.
+    return (
+        <SeatCapacityProvider>
+            <DashboardLayout onSignOut={handleSignOut} />
+        </SeatCapacityProvider>
+    );
 }
 
 /** Friendly 404 for unmatched client routes. */
@@ -390,7 +400,8 @@ export function AppRoutes(): JSX.Element {
                         <Route path="/rosters/list" element={<RostersListPage />} />
                         <Route path="/rosters/:id" element={<RosterDetailPage />} />
                         <Route path="/shifts" element={<ShiftsListPage />} />
-                        <Route path="/shift-templates" element={<ShiftTemplatesListPage />} />
+                        {/* Disabled: /shift-templates page is hidden until the feature is re-enabled. */}
+                        {/* <Route path="/shift-templates" element={<ShiftTemplatesListPage />} /> */}
                         <Route path="/leave-requests" element={<LeaveRequestsListPage />} />
                         <Route path="/leave-requests/:id" element={<LeaveRequestDetailPage />} />
                     </Route>

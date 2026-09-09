@@ -224,12 +224,14 @@ class EmployeeDeactivationTest extends TestCase
         ])->assertOk();
     }
 
-    public function test_reactivating_an_employee_does_not_bypass_password_setup(): void
+    public function test_an_invited_account_cannot_be_hand_flipped_to_active(): void
     {
         $company = Company::factory()->create();
         $this->actingAsCompanyAdmin($company);
 
-        // Invited, but has never set a password.
+        // Invited, but has never set a password. (A directory row that still
+        // points at an `invited` account is a `pending` member; the stale
+        // `active` row below mirrors legacy data before the backfill.)
         $user = User::factory()->create([
             'company_id' => $company->id,
             'status' => 'invited',
@@ -245,11 +247,16 @@ class EmployeeDeactivationTest extends TestCase
             'status' => 'active',
         ]);
 
+        // Flipping the employee row (or re-saving it as active) must not hand
+        // out access to an account whose password was never chosen by its
+        // owner: acceptance is the only activation path, so the edit is
+        // refused outright and nothing is half-applied.
         $this->putJson("/api/v1/employees/{$employee->id}", ['status' => 'active'])
-            ->assertOk();
+            ->assertStatus(422)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('code', 'INVITATION_PENDING');
 
-        // Still "invited": flipping the employee row must not hand out access to
-        // an account whose password was never chosen by its owner.
+        $this->assertSame('active', $employee->fresh()->status);
         $this->assertSame('invited', $user->fresh()->status);
     }
 }

@@ -11,6 +11,18 @@ interface PlanCardProps {
     plan: ManagementPlan;
     /** Whether this plan is the one the business is currently subscribed to. */
     isCurrent: boolean;
+    /**
+     * Whether the current plan can be renewed (its subscription expired or its
+     * checkout was never paid, so the business is no longer entitled). Renders
+     * an actionable button instead of the disabled "Current plan" placeholder.
+     */
+    isRenewable?: boolean;
+    /**
+     * Overrides the renewal wording when the situation is not a plain expiry —
+     * e.g. "Payment pending" for an unfinished Stripe Checkout. Also switches
+     * the call to action to "Complete payment".
+     */
+    renewalLabel?: string;
     /** Whether the user may trigger a plan change (upgrade/downgrade). */
     canManage: boolean;
     /**
@@ -40,6 +52,8 @@ const CYCLE_OPTIONS: Array<{ value: string; label: string }> = [
 export function PlanCard({
     plan,
     isCurrent,
+    isRenewable = false,
+    renewalLabel,
     canManage,
     selectedCycle,
     onCycleChange,
@@ -59,7 +73,11 @@ export function PlanCard({
             <CardHeader>
                 <div className="flex items-center justify-between gap-2">
                     <CardTitle className="text-lg">{plan.name}</CardTitle>
-                    {isCurrent && <Badge variant="primary">Current plan</Badge>}
+                    {isCurrent && (
+                        <Badge variant={isRenewable ? (renewalLabel ? 'warning' : 'danger') : 'primary'}>
+                            {isRenewable ? (renewalLabel ?? 'Expired') : 'Current plan'}
+                        </Badge>
+                    )}
                 </div>
                 <CardDescription>{plan.description}</CardDescription>
 
@@ -70,14 +88,10 @@ export function PlanCard({
 
             <CardContent className="flex flex-1 flex-col gap-4">
                 <div className="flex items-center gap-2 text-sm">
-                    <span className="font-medium text-foreground">{formatCapacity(plan.maxBranches)}</span>
+                    <span className="font-medium text-foreground">{formatCapacity(plan.maxSeats)}</span>
                     <span className="text-muted-foreground">
-                        {plan.maxBranches === null ? 'branches (unlimited)' : 'active branches'}
+                        {plan.maxSeats === null ? 'active users (unlimited)' : 'active users (seats)'}
                     </span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                    <span className="font-medium text-foreground">{formatCapacity(plan.maxEmployees)}</span>
-                    <span className="text-muted-foreground">employees</span>
                 </div>
 
                 <div className="flex flex-wrap gap-1.5">
@@ -107,7 +121,7 @@ export function PlanCard({
             </CardContent>
 
             <CardFooter>
-                {isCurrent ? (
+                {isCurrent && !isRenewable ? (
                     <Button variant="outline" disabled className="w-full">
                         Current plan
                     </Button>
@@ -117,7 +131,7 @@ export function PlanCard({
                         disabled={!canManage}
                         onClick={() => onSelect(plan)}
                     >
-                        Switch to this plan
+                        {isRenewable ? (renewalLabel ? 'Complete payment' : 'Renew this plan') : 'Switch to this plan'}
                     </Button>
                 )}
             </CardFooter>

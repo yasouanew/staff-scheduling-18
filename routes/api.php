@@ -24,7 +24,8 @@ use App\Http\Controllers\Api\PublicPlanController;
 use App\Http\Controllers\Api\RosterChangesController;
 use App\Http\Controllers\Api\RosterController;
 use App\Http\Controllers\Api\ShiftController;
-use App\Http\Controllers\Api\ShiftTemplateController;
+// Disabled: /shift-templates API surface is hidden until the feature is re-enabled.
+// use App\Http\Controllers\Api\ShiftTemplateController;
 use App\Http\Controllers\Api\StripeBillingWebhookController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\SubscriptionPaymentController;
@@ -198,6 +199,8 @@ Route::prefix('v1')->group(function () {
             ->name('api.subscription.usage');
         Route::get('subscription/features', [PlanSubscriptionController::class, 'features'])
             ->name('api.subscription.features');
+        Route::get('subscription/plan-change', [PlanSubscriptionController::class, 'planChangeEstimate'])
+            ->name('api.subscription.plan-change-estimate');
         Route::get('subscription/payments', [PlanSubscriptionController::class, 'payments'])
             ->name('api.subscription.payments');
         Route::get('subscription/invoices', [PlanSubscriptionController::class, 'invoices'])
@@ -206,6 +209,10 @@ Route::prefix('v1')->group(function () {
             ->name('api.subscription.checkout');
         Route::post('subscription/checkout/confirm', [PlanSubscriptionController::class, 'confirmCheckout'])
             ->name('api.subscription.checkout-confirm');
+        Route::post('subscription/checkout/retry', [PlanSubscriptionController::class, 'retryCheckout'])
+            ->name('api.subscription.checkout-retry');
+        Route::post('subscription/checkout/discard', [PlanSubscriptionController::class, 'discardIncomplete'])
+            ->name('api.subscription.checkout-discard');
         Route::post('subscription/upgrade', [PlanSubscriptionController::class, 'upgrade'])
             ->name('api.subscription.upgrade');
         Route::post('subscription/downgrade', [PlanSubscriptionController::class, 'downgrade'])
@@ -286,11 +293,12 @@ Route::prefix('v1')->group(function () {
             Route::post('employees/{employee}/transfer', [EmployeeController::class, 'transfer'])
                 ->name('api.employees.transfer');
 
-            // Send / revoke an onboarding invitation from the team page row menu.
+            // Send an onboarding invitation from the team page row menu.
+            // Revoke invite feature disabled — DELETE route commented out.
             Route::post('employees/{employee}/invitation', [EmployeeInvitationController::class, 'store'])
                 ->name('api.employees.invitation.store');
-            Route::delete('employees/{employee}/invitation', [EmployeeInvitationController::class, 'destroy'])
-                ->name('api.employees.invitation.destroy');
+            // Route::delete('employees/{employee}/invitation', [EmployeeInvitationController::class, 'destroy'])
+            //     ->name('api.employees.invitation.destroy');
 
             Route::apiResource('employees', EmployeeController::class);
 
@@ -308,8 +316,8 @@ Route::prefix('v1')->group(function () {
             Route::delete('employees/{employee}/availabilities/{availability}', [EmployeeAvailabilityController::class, 'destroy'])
                 ->name('api.employees.availabilities.destroy');
 
-            // Shift template management (CRUD)
-            Route::apiResource('shift-templates', ShiftTemplateController::class);
+            // Disabled: Shift template management (CRUD) is hidden until the feature is re-enabled.
+            // Route::apiResource('shift-templates', ShiftTemplateController::class);
 
             // Roster management (CRUD + copy previous week + publish)
             Route::post('rosters/copy-previous-week', [RosterController::class, 'copyPreviousWeek'])

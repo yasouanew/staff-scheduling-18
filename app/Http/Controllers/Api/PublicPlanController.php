@@ -29,6 +29,9 @@ class PublicPlanController extends Controller
                 'price_yearly' => $plan->price_yearly,
                 'max_employees' => $plan->max_employees,
                 'max_branches' => $plan->max_branches,
+                // Seat allowance (billable active users) derived from the plan cap
+                // so marketing advertises seats, matching the in-app plan cards.
+                'max_seats' => $plan->maxSeats(),
                 'features' => $plan->features ?? [],
             ]);
 

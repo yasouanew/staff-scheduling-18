@@ -1,4 +1,5 @@
-import { CalendarClock, MailPlus, MoreHorizontal, Pencil, UserX } from 'lucide-react';
+import { CalendarClock, MailPlus, MoreHorizontal, Pencil } from 'lucide-react';
+// import { UserX } from 'lucide-react'; // Revoke invite feature disabled
 import { useNavigate } from 'react-router-dom';
 
 import {
@@ -19,8 +20,9 @@ interface EmployeeRowActionsProps {
     onEdit: (employee: Employee) => void;
     /** Opens the send-invitation dialog for this employee. */
     onSendInvite: (employee: Employee) => void;
-    /** Opens the revoke-invitation confirmation for this employee. */
-    onRevokeInvite: (employee: Employee) => void;
+    // Revoke invite feature disabled.
+    // /** Opens the revoke-invitation confirmation for this employee. */
+    // onRevokeInvite: (employee: Employee) => void;
 }
 
 /**
@@ -37,7 +39,7 @@ export function EmployeeRowActions({
     employee,
     onEdit,
     onSendInvite,
-    onRevokeInvite,
+    // onRevokeInvite, // Revoke invite feature disabled
 }: EmployeeRowActionsProps): JSX.Element {
     const navigate = useNavigate();
 
@@ -47,10 +49,11 @@ export function EmployeeRowActions({
     // the item is disabled once the invitation has been accepted.
     const hasAccepted = employee.invitation?.status === 'accepted';
 
-    // Revoking only makes sense for an outstanding invitation: an accepted one is
-    // already inert (the person has onboarded), and an expired one has no live
-    // secret left to cancel. Mirrors the backend's `isPending()` semantics.
-    const isPending = employee.invitation?.status === 'pending';
+    // Revoke invite feature disabled.
+    // // Revoking only makes sense for an outstanding invitation: an accepted one is
+    // // already inert (the person has onboarded), and an expired one has no live
+    // // secret left to cancel. Mirrors the backend's `isPending()` semantics.
+    // const isPending = employee.invitation?.status === 'pending';
 
     return (
         <DropdownMenu>
@@ -86,6 +89,7 @@ export function EmployeeRowActions({
                     {hasAccepted ? 'Invite accepted' : inviteLabel}
                 </DropdownMenuItem>
 
+                {/* Revoke invite feature disabled.
                 {isPending && (
                     <DropdownMenuItem
                         onSelect={() => onRevokeInvite(employee)}
@@ -95,6 +99,7 @@ export function EmployeeRowActions({
                         Revoke invite
                     </DropdownMenuItem>
                 )}
+                */}
 
                 <DropdownMenuSeparator />
 

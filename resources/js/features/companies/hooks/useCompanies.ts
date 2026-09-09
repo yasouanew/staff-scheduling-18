@@ -103,7 +103,8 @@ interface SubscriptionDto {
     starts_at: string | null;
     ends_at: string | null;
     trial_ends_at: string | null;
-    plan?: { id: number; name: string } | null;
+    plan?: { id: number; name: string; max_seats?: number | null } | null;
+    usage?: { used?: number; limit?: number | null } | null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -184,12 +185,15 @@ function mapSubscription(dto: SubscriptionDto): CompanySubscription {
         stripeStatus: dto.stripe_status,
         billingCycle: dto.billing_cycle,
         planName: dto.plan?.name ?? null,
+        planMaxSeats: dto.plan?.max_seats ?? null,
         onTrial: dto.on_trial,
         isActive: dto.is_active,
         isCancelled: dto.is_cancelled,
         startsAt: dto.starts_at,
         endsAt: dto.ends_at,
         trialEndsAt: dto.trial_ends_at,
+        seatsUsed: dto.usage?.used ?? 0,
+        seatsLimit: dto.usage?.limit ?? null,
     };
 }
 

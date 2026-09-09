@@ -93,5 +93,54 @@ return Application::configure(basePath: dirname(__DIR__))
                 'errors' => $e->context,
             ], $e->getCode() ?: 422);
         });
+
+        // Activating a user account that would push the business over its
+        // entitled plan's seat allowance translates into the same structured
+        // error shape as branch capacity errors:
+        //
+        //     {
+        //         "success": false,
+        //         "message": "Seat limit reached. Upgrade your plan to add more members.",
+        //         "code": "EMPLOYEE_CAPACITY_REACHED",
+        //         "errors": { "used": 5, "limit": 5, "remaining": 0 }
+        //     }
+        $exceptions->render(function (\App\Exceptions\UserSeatLimitExceededException $e, Request $request) {
+            if (! $request->is('api/*') && ! $request->expectsJson()) {
+                return null;
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+                'code' => $e->errorCode,
+                'errors' => $e->context,
+            ], $e->getCode() ?: 422);
+        });
+
+        // Trying to hand-flip a member who has not accepted their invitation yet
+        // to `active` translates into the same structured error shape:
+        //
+        //     {
+        //         "success": false,
+        //         "message": "This member hasn't accepted their invitation yet. They become Active automatically once they accept.",
+        //         "code": "INVITATION_PENDING",
+        //         "errors": { "status": "pending" }
+        //     }
+        //
+        // Acceptance (web set-password link / mobile code / reset-password) is
+        // the only path that activates an invited account, so this refusal is
+        // not capacity-driven — it applies whether or not a seat is free.
+        $exceptions->render(function (\App\Exceptions\InvitationPendingException $e, Request $request) {
+            if (! $request->is('api/*') && ! $request->expectsJson()) {
+                return null;
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+                'code' => $e->errorCode,
+                'errors' => $e->context,
+            ], $e->getCode() ?: 422);
+        });
     })->create();
 

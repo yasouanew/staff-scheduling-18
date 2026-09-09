@@ -136,6 +136,26 @@ const columns: ColumnDef<PlatformSubscription>[] = [
         ),
     },
     {
+        accessorKey: 'seatsUsed',
+        header: 'Active users (seats)',
+        cell: ({ row }) => {
+            const { seatsUsed, seatsLimit } = row.original;
+            const overLimit = seatsLimit !== null && seatsUsed > seatsLimit;
+            return (
+                <span
+                    className={cn(
+                        'text-sm tabular-nums',
+                        overLimit ? 'font-medium text-danger' : '',
+                    )}
+                >
+                    {seatsLimit === null
+                        ? `${seatsUsed} used`
+                        : `${seatsUsed} / ${seatsLimit}`}
+                </span>
+            );
+        },
+    },
+    {
         accessorKey: 'createdAt',
         header: 'Created',
         cell: ({ row }) => (
@@ -156,7 +176,7 @@ function SubscriptionsOverview(): JSX.Element {
             <PageHeader
                 title="Subscriptions"
                 eyebrow="Platform"
-                description="Every subscription across the platform — company, plan, billing cycle, trial and active branch usage. This is an operational view, not customer self-service."
+                description="Every subscription across the platform — company, plan, billing cycle, trial, active branches and active-user seat usage. This is an operational view, not customer self-service."
             />
 
             {isError ? (

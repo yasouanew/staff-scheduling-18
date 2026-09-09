@@ -4,7 +4,8 @@ import {
     Building,
     Building2,
     CalendarDays,
-    CalendarRange,
+    // Disabled: CalendarRange was only used by the (hidden) Shift Templates nav item.
+    // CalendarRange,
     CalendarX,
     Clock,
     CreditCard,
@@ -50,7 +51,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
 
     { label: 'Rosters', to: '/rosters', icon: CalendarDays, section: 'Scheduling', roles: COMPANY_ROLES },
     { label: 'Shifts', to: '/shifts', icon: Clock, section: 'Scheduling', roles: COMPANY_ROLES },
-    { label: 'Shift Templates', to: '/shift-templates', icon: CalendarRange, section: 'Scheduling', roles: COMPANY_ROLES },
+    // Disabled: the Shift Templates nav item is hidden until the feature is re-enabled.
+    // { label: 'Shift Templates', to: '/shift-templates', icon: CalendarRange, section: 'Scheduling', roles: COMPANY_ROLES },
     { label: 'Employees', to: '/employees', icon: Users, section: 'Scheduling', roles: COMPANY_ROLES },
     { label: 'Leave Requests', to: '/leave-requests', icon: CalendarX, section: 'Scheduling', roles: COMPANY_ROLES },
     { label: 'Leave Types', to: '/leave-types', icon: CalendarDays, section: 'Scheduling', roles: COMPANY_ADMIN_ONLY },

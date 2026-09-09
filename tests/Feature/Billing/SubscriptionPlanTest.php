@@ -12,6 +12,7 @@ use App\Models\PlanFeature;
 use App\Models\Subscription;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Laravel\Sanctum\Sanctum;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
@@ -131,6 +132,32 @@ class SubscriptionPlanTest extends TestCase
         $this->postJson("/api/v1/branches/{$branch->id}/activate")->assertOk();
     }
 
+    /**
+     * Creates active member accounts (each consuming a seat) assigned to a
+     * branch, plus their employee rows. Every linked user must have the
+     * company's `company_id` set so it is counted by the seat-based downgrade
+     * guard — `Employee::factory()` alone would create users with
+     * `company_id = null`, which are not active seats.
+     */
+    protected function createActiveMemberSeats(Company $company, Branch $branch, int $count): void
+    {
+        $users = User::factory()->count($count)->create([
+            'company_id' => $company->id,
+            'status' => 'active',
+        ]);
+
+        foreach ($users as $user) {
+            $user->assignRole('employee');
+
+            Employee::factory()->create([
+                'company_id' => $company->id,
+                'user_id' => $user->id,
+                'branch_id' => $branch->id,
+                'status' => 'active',
+            ]);
+        }
+    }
+
     /*
     |--------------------------------------------------------------------------
     | GET /api/v1/subscription
@@ -176,6 +203,41 @@ class SubscriptionPlanTest extends TestCase
             ->assertJsonPath('data.plan', null)
             ->assertJsonPath('data.subscription', null)
             ->assertJsonPath('data.entitled', false);
+    }
+
+    public function test_subscription_summary_still_loads_after_expiry(): void
+    {
+        $company = Company::factory()->create();
+        $this->actingAsCompanyAdmin($company);
+        $plan = Plan::factory()->create([
+            'name' => 'Growth',
+            'currency' => 'AUD',
+            'price_monthly' => 29.00,
+            'price_yearly' => 290.00,
+            'price_six_monthly' => 159.00,
+        ]);
+        $expired = Subscription::factory()->create([
+            'company_id' => $company->id,
+            'plan_id' => $plan->id,
+            'status' => 'expired',
+            'billing_cycle' => 'monthly',
+            'starts_at' => now()->subMonths(2),
+            'ends_at' => now()->subMonth(),
+        ]);
+
+        $this->getJson('/api/v1/subscription')
+            ->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.subscription.id', $expired->id)
+            ->assertJsonPath('data.subscription.status', 'expired')
+            ->assertJsonPath('data.subscription.starts_at', $expired->starts_at->toIso8601String())
+            ->assertJsonPath('data.subscription.ends_at', $expired->ends_at->toIso8601String())
+            ->assertJsonPath('data.plan.name', 'Growth')
+            ->assertJsonPath('data.entitled', false)
+            ->assertJsonPath('data.subscription_history.0.id', $expired->id)
+            ->assertJsonPath('data.subscription_history.0.status', 'expired')
+            ->assertJsonPath('data.subscription_history.0.plan_name', 'Growth')
+            ->assertJsonPath('data.subscription_history.0.is_current', true);
     }
 
     public function test_subscription_summary_includes_trial_information(): void
@@ -254,10 +316,7 @@ class SubscriptionPlanTest extends TestCase
         $this->actingAsCompanyAdmin($company);
         $this->activateBranchViaApi($branch);
 
-        Employee::factory()->count(5)->create([
-            'company_id' => $company->id,
-            'branch_id' => $branch->id,
-        ]);
+        $this->createActiveMemberSeats($company, $branch, 5);
 
         $this->getJson('/api/v1/subscription/usage')
             ->assertOk()
@@ -391,9 +450,9 @@ class SubscriptionPlanTest extends TestCase
         ])
             ->assertOk()
             ->assertJsonPath('success', true)
-            ->assertJsonPath('data.plan.id', $target->id)
-            ->assertJsonPath('data.plan.name', $target->name)
-            ->assertJsonPath('data.subscription.billing_cycle', 'yearly');
+            ->assertJsonPath('data.subscription.plan.id', $target->id)
+            ->assertJsonPath('data.subscription.plan.name', $target->name)
+            ->assertJsonPath('data.subscription.subscription.billing_cycle', 'yearly');
 
         $this->assertDatabaseHas('subscriptions', [
             'id' => $subscription->id,
@@ -474,11 +533,9 @@ class SubscriptionPlanTest extends TestCase
         $this->actingAsCompanyAdmin($company);
         $this->activateBranchViaApi($branch);
 
-        // 40 active employees > 25 capacity on the target plan.
-        Employee::factory()->count(40)->create([
-            'company_id' => $company->id,
-            'branch_id' => $branch->id,
-        ]);
+        // 40 active members with linked company accounts (each consumes a seat)
+        // => 41 active seats > 25 capacity on the target plan.
+        $this->createActiveMemberSeats($company, $branch, 40);
 
         $this->postJson('/api/v1/subscription/downgrade', [
             'plan_id' => $target->id,
@@ -486,7 +543,7 @@ class SubscriptionPlanTest extends TestCase
             ->assertStatus(422)
             ->assertJsonPath('success', false)
             ->assertJsonPath('code', 'DOWNGRADE_EMPLOYEE_LIMIT_EXCEEDED')
-            ->assertJsonPath('errors.used', 40)
+            ->assertJsonPath('errors.used', 41)
             ->assertJsonPath('errors.capacity', 25);
 
         $this->assertDatabaseHas('subscriptions', [
@@ -508,19 +565,17 @@ class SubscriptionPlanTest extends TestCase
         $this->actingAsCompanyAdmin($company);
         $this->activateBranchViaApi($branch);
 
-        // Only 1 active branch and 5 employees — fits within the 3 / 25 target.
-        Employee::factory()->count(5)->create([
-            'company_id' => $company->id,
-            'branch_id' => $branch->id,
-        ]);
+        // Only 1 active branch and 5 member accounts — 6 active seats fit
+        // within the 3-branch / 25-seat target.
+        $this->createActiveMemberSeats($company, $branch, 5);
 
         $this->postJson('/api/v1/subscription/downgrade', [
             'plan_id' => $target->id,
         ])
             ->assertOk()
-            ->assertJsonPath('data.plan.id', $target->id)
-            ->assertJsonPath('data.plan.max_branches', 3)
-            ->assertJsonPath('data.plan.max_employees', 25);
+            ->assertJsonPath('data.subscription.plan.id', $target->id)
+            ->assertJsonPath('data.subscription.plan.max_branches', 3)
+            ->assertJsonPath('data.subscription.plan.max_employees', 25);
 
         $this->assertDatabaseHas('subscriptions', [
             'id' => $subscription->id,
@@ -706,5 +761,155 @@ class SubscriptionPlanTest extends TestCase
         $this->assertDatabaseMissing('branch_subscriptions', [
             'branch_id' => $otherBranch->id,
         ]);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | GET /api/v1/subscription/plan-change
+    |--------------------------------------------------------------------------
+    */
+
+    /**
+     * The estimate is computed against the SELECTED target plan (not the
+     * current one), so an upgrade must produce a positive prorated charge
+     * equal to (newPrice - oldPrice) * elapsed, and the renewal date must
+     * stay exactly the same as the subscription's `ends_at`.
+     */
+    public function test_company_admin_can_fetch_plan_change_estimate_for_upgrade(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-01-16 00:00:00'));
+
+        [$company, $currentPlan, $subscription] = $this->makeCompanyWithActiveSubscription([
+            'price_monthly' => 29.00,
+            'price_yearly' => 290.00,
+        ]);
+
+        // 30-day period, 15 days elapsed => elapsed fraction = 0.5.
+        $subscription->update([
+            'starts_at' => Carbon::parse('2026-01-01 00:00:00'),
+            'ends_at' => Carbon::parse('2026-01-31 00:00:00'),
+        ]);
+
+        $target = Plan::factory()->create([
+            'price_monthly' => 49.00,
+            'price_yearly' => 490.00,
+            'currency' => 'AUD',
+        ]);
+
+        $this->actingAsCompanyAdmin($company);
+
+        $this->getJson('/api/v1/subscription/plan-change?'.http_build_query([
+            'plan_id' => $target->id,
+            'billing_cycle' => 'monthly',
+        ]))
+            ->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.amount_due', 10)
+            ->assertJsonPath('data.currency', 'AUD')
+            ->assertJsonPath('data.elapsed', 0.5)
+            ->assertJsonPath('data.renews_at', $subscription->ends_at->toIso8601String());
+
+        // The current plan is untouched — this is a read-only estimate.
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $subscription->id,
+            'plan_id' => $currentPlan->id,
+        ]);
+    }
+
+    /**
+     * A downgrade produces a negative amount (a credit toward the next
+     * renewal), still preserving the renewal date.
+     */
+    public function test_plan_change_estimate_reports_downgrade_credit(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-01-16 00:00:00'));
+
+        [$company, , $subscription] = $this->makeCompanyWithActiveSubscription([
+            'price_monthly' => 49.00,
+            'price_yearly' => 490.00,
+        ]);
+
+        $subscription->update([
+            'starts_at' => Carbon::parse('2026-01-01 00:00:00'),
+            'ends_at' => Carbon::parse('2026-01-31 00:00:00'),
+        ]);
+
+        $target = Plan::factory()->create([
+            'price_monthly' => 29.00,
+            'price_yearly' => 290.00,
+            'currency' => 'AUD',
+        ]);
+
+        $this->actingAsCompanyAdmin($company);
+
+        $this->getJson('/api/v1/subscription/plan-change?'.http_build_query([
+            'plan_id' => $target->id,
+            'billing_cycle' => 'monthly',
+        ]))
+            ->assertOk()
+            ->assertJsonPath('data.amount_due', -10)
+            ->assertJsonPath('data.elapsed', 0.5)
+            ->assertJsonPath('data.renews_at', $subscription->ends_at->toIso8601String());
+    }
+
+    /**
+     * Switching to the same plan (or a plan priced identically for the cycle)
+     * yields a zero amount due — nothing to pay, expiry unchanged.
+     */
+    public function test_plan_change_estimate_is_zero_for_same_plan(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-01-16 00:00:00'));
+
+        [$company, $currentPlan, $subscription] = $this->makeCompanyWithActiveSubscription([
+            'price_monthly' => 29.00,
+        ]);
+
+        $subscription->update([
+            'starts_at' => Carbon::parse('2026-01-01 00:00:00'),
+            'ends_at' => Carbon::parse('2026-01-31 00:00:00'),
+        ]);
+
+        $this->actingAsCompanyAdmin($company);
+
+        $this->getJson('/api/v1/subscription/plan-change?'.http_build_query([
+            'plan_id' => $currentPlan->id,
+            'billing_cycle' => 'monthly',
+        ]))
+            ->assertOk()
+            ->assertJsonPath('data.amount_due', 0)
+            ->assertJsonPath('data.elapsed', 0.5)
+            ->assertJsonPath('data.renews_at', $subscription->ends_at->toIso8601String());
+    }
+
+    public function test_plan_change_estimate_requires_a_valid_plan(): void
+    {
+        [$company] = $this->makeCompanyWithActiveSubscription();
+        $this->actingAsCompanyAdmin($company);
+
+        $this->getJson('/api/v1/subscription/plan-change?plan_id=999999')
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('plan_id');
+    }
+
+    public function test_plan_change_estimate_requires_an_active_subscription(): void
+    {
+        $company = Company::factory()->create();
+        $this->actingAsCompanyAdmin($company);
+        $target = Plan::factory()->create();
+
+        $this->getJson('/api/v1/subscription/plan-change?'.http_build_query([
+            'plan_id' => $target->id,
+        ]))->assertNotFound();
+    }
+
+    public function test_employee_cannot_fetch_plan_change_estimate(): void
+    {
+        [$company, , $subscription] = $this->makeCompanyWithActiveSubscription();
+        $target = Plan::factory()->create();
+        $this->actingAsEmployee($company);
+
+        $this->getJson('/api/v1/subscription/plan-change?'.http_build_query([
+            'plan_id' => $target->id,
+        ]))->assertForbidden();
     }
 }

@@ -608,4 +608,58 @@ class RosterChangesTest extends TestCase
             'mutations' => [['type' => 'cancel']],
         ])->assertUnprocessable()->assertJsonValidationErrors('mutations.0.id');
     }
+
+    public function test_applying_an_add_mutation_for_an_inactive_employee_is_rejected(): void
+    {
+        $this->actingAsSuperAdmin();
+        ['roster' => $roster, 'company' => $company] = $this->makePublishedRoster();
+
+        $user = User::factory()->create(['company_id' => $company->id]);
+        $inactiveEmployee = Employee::factory()->create([
+            'company_id' => $company->id,
+            'user_id' => $user->id,
+            'status' => 'inactive',
+        ]);
+
+        $this->postJson("/api/v1/rosters/{$roster->id}/changes/apply", [
+            'version' => $roster->version,
+            'mutations' => [[
+                'type' => 'add',
+                'shift' => [
+                    'employee_id' => $inactiveEmployee->id,
+                    'date' => $roster->week_start,
+                    'start_time' => '13:00',
+                    'end_time' => '21:00',
+                ],
+            ]],
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors('mutations.0.shift.employee_id');
+
+        $this->assertDatabaseMissing('shifts', ['employee_id' => $inactiveEmployee->id]);
+    }
+
+    public function test_applying_a_reassign_mutation_to_an_inactive_employee_is_rejected(): void
+    {
+        $this->actingAsSuperAdmin();
+        ['roster' => $roster, 'shift' => $shift, 'company' => $company] = $this->makePublishedRoster();
+
+        $user = User::factory()->create(['company_id' => $company->id]);
+        $inactiveEmployee = Employee::factory()->create([
+            'company_id' => $company->id,
+            'user_id' => $user->id,
+            'status' => 'terminated',
+        ]);
+
+        $this->postJson("/api/v1/rosters/{$roster->id}/changes/apply", [
+            'version' => $roster->version,
+            'mutations' => [[
+                'type' => 'reassign',
+                'id' => $shift->id,
+                'employee_id' => $inactiveEmployee->id,
+            ]],
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors('mutations.0.employee_id');
+
+        $this->assertDatabaseHas('shifts', ['id' => $shift->id, 'employee_id' => $shift->employee_id]);
+    }
 }

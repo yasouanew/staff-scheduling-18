@@ -143,6 +143,7 @@ async function fetchPlatformMetrics(): Promise<PlatformMetrics> {
             totalCompanies: stats.total_companies,
             activeCompanies: stats.active_companies,
             totalEmployees: stats.total_employees,
+            totalActiveSeats: stats.total_active_seats ?? 0,
             activeSubscriptions: stats.active_subscriptions,
         },
         planDistribution,
@@ -246,6 +247,9 @@ function mapSubscription(dto: PlatformSubscriptionDto): PlatformSubscription {
         trialEndsAt: dto.trial_ends_at,
         cancelledAt: dto.cancelled_at,
         activeBranchesCount: dto.active_branches_count ?? 0,
+        seatsUsed: dto.seats_used ?? 0,
+        seatsLimit: dto.seats_limit ?? null,
+        quantity: dto.quantity ?? null,
         createdAt: dto.created_at,
     };
 }

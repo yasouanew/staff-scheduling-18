@@ -20,11 +20,19 @@ import {
 } from '@/Components/ui/alert-dialog';
 
 import { useBranchOptions } from '@/features/branches/hooks/useBranches';
+import { UpgradePromptDialog } from '@/features/billing/components/UpgradePromptDialog';
+import { useSeatCapacity } from '@/features/billing/context/SeatCapacityContext';
+import { getBillingErrorCode } from '@/features/billing/lib/billing-errors';
 import { useDepartmentOptions } from '@/features/departments/hooks/useDepartments';
 import { usePositionOptions } from '@/features/positions/hooks/usePositions';
 import { getApiErrorMessage } from '@/lib/api-client';
+import { handleCapacityError } from '@/lib/capacity-errors';
 import { cn } from '@/lib/utils';
 import {
+    DEFAULT_EMPLOYEE_ROLE,
+    EMPLOYEE_ROLES,
+    EMPLOYEE_ROLE_DESCRIPTIONS,
+    EMPLOYEE_ROLE_LABELS,
     EMPLOYEE_STATUS_LABELS,
     EMPLOYEE_STATUSES,
     EMPLOYMENT_TYPE_LABELS,
@@ -68,6 +76,9 @@ const editEmployeeSchema = z.object({
             (value) => value === '' || (Number.isFinite(Number(value)) && Number(value) >= 0),
             'Enter a valid hourly rate.',
         ),
+    // Mirrors UpdateEmployeeRequest's `in:company_admin,scheduler,employee`. The
+    // role drives which workspace (if any) the person can reach after login.
+    role: z.enum(['company_admin', 'scheduler', 'employee']),
     // Mirrors UpdateEmployeeRequest's `in:active,pending,inactive,terminated`.
     status: z.enum(['active', 'pending', 'inactive', 'terminated']),
     // Optional profile fields accepted by the update endpoint.
@@ -82,6 +93,20 @@ const editEmployeeSchema = z.object({
 });
 
 type EditEmployeeFormValues = z.infer<typeof editEmployeeSchema>;
+
+/**
+ * Statuses an administrator may *choose* in the edit dialog.
+ *
+ * `pending` is deliberately absent: a member awaiting acceptance has a locked
+ * status. The backend refuses any hand change away from `pending`
+ * (InvitationPendingException), and the row is only ever promoted out of
+ * `pending` automatically when the invitee accepts — so offering the option
+ * would set the administrator up for a 422. The value itself is still a valid
+ * stored status; it simply isn't selectable here.
+ */
+const EDITABLE_EMPLOYEE_STATUSES = EMPLOYEE_STATUSES.filter(
+    (status) => status !== 'pending',
+);
 
 /** Gender options accepted by `UpdateEmployeeRequest` (`in:male,female,other,prefer_not_to_say`). */
 const GENDERS: readonly { value: string; label: string }[] = [
@@ -152,6 +177,7 @@ export function EditEmployeeModal({
             branchId: '',
             employmentType: 'full_time',
             hourlyRate: '',
+            role: DEFAULT_EMPLOYEE_ROLE,
             status: 'active',
             employeeNumber: '',
             dob: '',
@@ -169,20 +195,63 @@ export function EditEmployeeModal({
      * access. Non-null means the confirmation dialog is open.
      */
     const [pendingValues, setPendingValues] = useState<EditEmployeeFormValues | null>(null);
+    const [upgradeOpen, setUpgradeOpen] = useState(false);
+
+    // Live active-user seat capacity. A seat is consumed when a previously
+    // deactivated member who already has a password is set back to Active
+    // (the backend guard throws `EMPLOYEE_CAPACITY_REACHED` if it is full).
+    const seatCapacity = useSeatCapacity();
 
     // Positions belong to a department, so only offer titles from the chosen one.
     const selectedDepartmentId = watch('departmentId');
+
+    const selectedStatus = watch('status');
+    const selectedRole = watch('role');
+
+    /*
+     * True when the member is still waiting to accept their invitation. Their
+     * employment status is locked in this state — acceptance (setting their
+     * password) is the only thing that promotes the row to `active`, so the
+     * dialog replaces the status dropdown with a read-only note instead of
+     * letting an admin attempt a change the backend will refuse.
+     */
+    const isPendingMember = employee?.status === 'pending';
 
     /*
      * True when saving would cut off this person's access: they can currently
      * sign in, and the form has moved them off `active`. Anyone who has not
      * accepted their invitation has no access to lose, so no warning is shown.
      */
-    const selectedStatus = watch('status');
     const revokesAccess =
         selectedStatus !== 'active' &&
         employee?.status === 'active' &&
         employee?.invitation?.status === 'accepted';
+
+    /*
+     * True when saving moves this person onto `active` from any other status
+     * *and* they are a real login (an accepted invitation, i.e. a deactivated
+     * member being reactivated).
+     *
+     * Under per-seat billing such a reactivation re-takes a seat, so it must be
+     * refused while the plan is full. The backend `syncAccountAccess` guard is
+     * the authoritative backstop; this predicate pre-empts it up front so the
+     * admin is told to upgrade instead of seeing a 422.
+     *
+     * A member who has not accepted their invitation yet (`pending` row with an
+     * outstanding invite) can never be hand-flipped to Active — acceptance is
+     * the only activation path, and the backend refuses it with
+     * `INVITATION_PENDING` regardless of seat availability — so they are
+     * deliberately excluded from this pre-flight and the request is sent to get
+     * the accurate refusal message. A row with no linked account consumes no
+     * seat and is never blocked.
+     */
+    const hasLinkedAccount = Boolean(employee?.email);
+    const hasOutstandingInvite = employee?.invitation?.status === 'pending';
+    const activatingAccess =
+        selectedStatus === 'active' &&
+        employee?.status !== 'active' &&
+        hasLinkedAccount &&
+        !hasOutstandingInvite;
 
 
     const { data: positionOptions = [], isLoading: isLoadingPositions } = usePositionOptions(
@@ -208,6 +277,9 @@ export function EditEmployeeModal({
             branchId: employee.branchId ?? '',
             employmentType: employee.employmentType,
             hourlyRate: employee.hourlyRate ?? '',
+            // Fall back to the least-privileged role when the row has no linked
+            // account or the backend has not reported one yet.
+            role: employee.role ?? DEFAULT_EMPLOYEE_ROLE,
             status: employee.status,
             employeeNumber: employee.employeeNumber ?? '',
             dob: employee.dob ?? '',
@@ -247,22 +319,50 @@ export function EditEmployeeModal({
 
     /** Persist the form, then close on success. */
     async function save(values: EditEmployeeFormValues): Promise<void> {
-        if (!employee) return;
+        // Snapshot the employee reference so that if the parent clears the prop
+        // (e.g. from an onOpenChange callback) while we are mid-await, the
+        // save still completes with the correct employee id.
+        const currentEmployee = employee;
+        if (!currentEmployee) return;
 
         const payload: UpdateEmployeeInput = values;
 
         try {
-            await updateEmployee.mutateAsync({ employeeId: employee.id, input: payload });
+            await updateEmployee.mutateAsync({ employeeId: currentEmployee.id, input: payload });
 
             // Spell out the access consequence, so an admin is never surprised
             // that "saved" also meant "signed them out of everything".
+            const wasRevokingAccess =
+                values.status !== 'active' &&
+                currentEmployee.status === 'active' &&
+                currentEmployee.invitation?.status === 'accepted';
             toast.success('Employee updated', {
-                description: revokesAccess
+                description: wasRevokingAccess
                     ? `${values.firstName} ${values.lastName} can no longer sign in and has been signed out of all devices.`
                     : `${values.firstName} ${values.lastName}'s details were saved.`,
             });
             onOpenChange(false);
         } catch (error) {
+            // A `422 INVITATION_PENDING` means this member has not accepted
+            // their invitation yet: only acceptance activates them (and takes
+            // their seat), so flipping the status dropdown to Active is
+            // refused regardless of seat availability.
+            if (getBillingErrorCode(error) === 'INVITATION_PENDING') {
+                toast.error('Invitation not accepted yet', {
+                    description: `${values.firstName} ${values.lastName} becomes Active automatically once they accept their invitation and set a password.`,
+                });
+                return;
+            }
+
+            // A `422 EMPLOYEE_CAPACITY_REACHED` means the seat allowance is full
+            // and stale on our side. Surface the upgrade prompt instead of a
+            // generic toast, always refetching seats so the count is refreshed.
+            const seatError = await handleCapacityError(error, () => seatCapacity.refetch());
+            if (seatError) {
+                setUpgradeOpen(true);
+                return;
+            }
+
             toast.error('Unable to save changes', {
                 description: getApiErrorMessage(error, 'Something went wrong. Please try again.'),
             });
@@ -277,6 +377,17 @@ export function EditEmployeeModal({
     const submit = handleSubmit(async (values) => {
         if (revokesAccess) {
             setPendingValues(values);
+
+            return;
+        }
+
+        // Reactivating a real (accepted) member re-takes a seat; pre-empt the
+        // backend 422 when the plan is already at capacity so the admin is told
+        // to free a seat or upgrade up front. A not-yet-accepted member is
+        // excluded above — the request goes through to get the accurate
+        // INVITATION_PENDING refusal in save().
+        if (activatingAccess && seatCapacity.isFull) {
+            setUpgradeOpen(true);
 
             return;
         }
@@ -735,6 +846,27 @@ export function EditEmployeeModal({
                                     </div>
                                 </div>
 
+                                {/* Role */}
+                                <div className="space-y-1.5">
+                                    <label
+                                        htmlFor="edit-role"
+                                        className="block text-sm font-medium text-foreground"
+                                    >
+                                        Role
+                                    </label>
+                                    <select id="edit-role" className={fieldClasses} {...register('role')}>
+                                        {EMPLOYEE_ROLES.map((option) => (
+                                            <option key={option} value={option}>
+                                                {EMPLOYEE_ROLE_LABELS[option]}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <p className="text-sm text-muted-foreground">
+                                        {EMPLOYEE_ROLE_DESCRIPTIONS[selectedRole] ??
+                                            EMPLOYEE_ROLE_DESCRIPTIONS[DEFAULT_EMPLOYEE_ROLE]}
+                                    </p>
+                                </div>
+
                                 {/* Status */}
                                 <div className="space-y-1.5">
                                     <label
@@ -743,16 +875,35 @@ export function EditEmployeeModal({
                                     >
                                         Employment status
                                     </label>
-                                    <select id="edit-status" className={fieldClasses} {...register('status')}>
-                                        {EMPLOYEE_STATUSES.map((option) => (
-                                            <option key={option} value={option}>
-                                                {EMPLOYEE_STATUS_LABELS[option]}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    <p className="text-sm text-muted-foreground">
-                                        Inactive employees stay in your records but cannot be rostered.
-                                    </p>
+                                    {isPendingMember ? (
+                                        <>
+                                            <div className="flex h-11 w-full items-center rounded-lg border border-border bg-muted/40 px-3 text-sm text-muted-foreground">
+                                                {EMPLOYEE_STATUS_LABELS.pending}
+                                            </div>
+                                            <p className="text-sm text-muted-foreground">
+                                                This member is waiting to accept their invitation. Their
+                                                status becomes Active automatically once they accept — it
+                                                can't be changed from here until then.
+                                            </p>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <select
+                                                id="edit-status"
+                                                className={fieldClasses}
+                                                {...register('status')}
+                                            >
+                                                {EDITABLE_EMPLOYEE_STATUSES.map((option) => (
+                                                    <option key={option} value={option}>
+                                                        {EMPLOYEE_STATUS_LABELS[option]}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <p className="text-sm text-muted-foreground">
+                                                Inactive employees stay in your records but cannot be rostered.
+                                            </p>
+                                        </>
+                                    )}
 
                                     {/* Warn up front, not only in the confirm step. */}
                                     {revokesAccess && (
@@ -821,7 +972,9 @@ export function EditEmployeeModal({
                     if (!open) setPendingValues(null);
                 }}
             >
-                <AlertDialogContent>
+                <AlertDialogContent
+                        onCloseAutoFocus={(e) => e.preventDefault()}
+                    >
                     <AlertDialogHeader>
                         <AlertDialogTitle>
                             Revoke {employee?.name ?? 'this employee'}&apos;s access?
@@ -861,6 +1014,19 @@ export function EditEmployeeModal({
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
+
+            {/* Upgrade prompt shown when re-activating a member is blocked by the
+                plan's active-user seat allowance. */}
+            <UpgradePromptDialog
+                open={upgradeOpen}
+                seatsNeeded={
+                    seatCapacity.seatsLimit !== null
+                        ? seatCapacity.seatsUsed + 1
+                        : 1
+                }
+                selectedCycle="monthly"
+                onOpenChange={setUpgradeOpen}
+            />
         </>
     );
 }

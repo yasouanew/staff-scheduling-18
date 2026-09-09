@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Services\UsageService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -34,6 +35,13 @@ class SubscriptionResource extends JsonResource
             'cancelled_at' => $this->cancelled_at?->toIso8601String(),
             'plan' => new PlanResource($this->whenLoaded('plan')),
             'payments' => SubscriptionPaymentResource::collection($this->whenLoaded('payments')),
+            // Billable per-seat usage (one seat = one active non-super-admin
+            // user) resolved against the company's entitled plan. Flat-rate
+            // plans keep `quantity` at 1; seat count is reporting only.
+            'usage' => $this->company ? app(UsageService::class)->seatUsage($this->company) : [
+                'used' => 0,
+                'limit' => null,
+            ],
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];

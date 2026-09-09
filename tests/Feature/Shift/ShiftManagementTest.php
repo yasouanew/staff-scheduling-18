@@ -218,4 +218,54 @@ class ShiftManagementTest extends TestCase
             'end_time' => '17:00',
         ])->assertForbidden();
     }
+
+    public function test_creating_a_shift_rejects_an_inactive_employee(): void
+    {
+        $this->actingAsSuperAdmin();
+        $company = Company::factory()->create();
+        $roster = Roster::factory()->create(['company_id' => $company->id]);
+        $employee = Employee::factory()->create(['company_id' => $company->id, 'status' => 'inactive']);
+
+        $this->postJson('/api/v1/shifts', [
+            'company_id' => $company->id,
+            'roster_id' => $roster->id,
+            'employee_id' => $employee->id,
+            'date' => '2026-01-05',
+            'start_time' => '09:00',
+            'end_time' => '17:00',
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors('employee_id');
+
+        $this->assertDatabaseMissing('shifts', ['employee_id' => $employee->id]);
+    }
+
+    public function test_updating_a_shift_rejects_an_inactive_employee(): void
+    {
+        $this->actingAsSuperAdmin();
+        $company = Company::factory()->create();
+        $roster = Roster::factory()->create(['company_id' => $company->id]);
+        $shift = Shift::factory()->create(['company_id' => $company->id, 'roster_id' => $roster->id, 'employee_id' => null]);
+        $employee = Employee::factory()->create(['company_id' => $company->id, 'status' => 'terminated']);
+
+        $this->putJson("/api/v1/shifts/{$shift->id}", ['employee_id' => $employee->id])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('employee_id');
+
+        $this->assertDatabaseHas('shifts', ['id' => $shift->id, 'employee_id' => null]);
+    }
+
+    public function test_assigning_an_inactive_employee_is_rejected(): void
+    {
+        $this->actingAsSuperAdmin();
+        $company = Company::factory()->create();
+        $shift = Shift::factory()->create(['company_id' => $company->id, 'employee_id' => null]);
+        $employee = Employee::factory()->create(['company_id' => $company->id, 'status' => 'inactive']);
+
+        $this->postJson("/api/v1/shifts/{$shift->id}/assign-employee", [
+            'employee_id' => $employee->id,
+        ])->assertUnprocessable()
+            ->assertJsonValidationErrors('employee_id');
+
+        $this->assertDatabaseHas('shifts', ['id' => $shift->id, 'employee_id' => null]);
+    }
 }

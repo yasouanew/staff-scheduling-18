@@ -1,13 +1,10 @@
 import * as AlertDialog from '@radix-ui/react-alert-dialog';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import type { ColumnDef } from '@tanstack/react-table';
-import { Building2, CreditCard, Eye, MapPin, MoreHorizontal, Pencil, Trash2, UserCog } from 'lucide-react';
+import { Building2, Eye, MapPin, MoreHorizontal, Pencil, Trash2, UserCog } from 'lucide-react';
 import { useState } from 'react';
 
-import { Badge } from '@/Components/ui/badge';
 import { DataTable } from '@/Components/tables/DataTable';
-import type { BranchUsageItem } from '@/features/billing/types';
-import { formatCapacity } from '@/features/billing/lib/format';
 import { cn } from '@/lib/utils';
 import { TIMEZONE_LABELS, type Branch } from '@/types/branch';
 
@@ -18,10 +15,6 @@ interface BranchesTableProps {
     branches: Branch[];
     /** Shows skeleton rows while the parent query is loading. */
     isLoading?: boolean;
-    /** Per-branch subscription usage from the billing usage endpoint. */
-    usage?: BranchUsageItem[];
-    /** Open the subscription/capacity management dialog for a branch. */
-    onManageSubscription?: (branch: Branch) => void;
     /** Navigate to the branch detail page. */
     onView: (branch: Branch) => void;
     /** Open the edit drawer for a branch. */
@@ -48,13 +41,11 @@ function BranchActionsMenu({
     branch,
     onView,
     onEdit,
-    onManageSubscription,
     onDelete,
 }: {
     branch: Branch;
     onView: (branch: Branch) => void;
     onEdit: (branch: Branch) => void;
-    onManageSubscription?: (branch: Branch) => void;
     onDelete: (branch: Branch) => void;
 }): JSX.Element {
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -88,13 +79,6 @@ function BranchActionsMenu({
                             <Pencil className="h-4 w-4" aria-hidden="true" />
                             Edit branch
                         </DropdownMenu.Item>
-
-                        {onManageSubscription && (
-                            <DropdownMenu.Item onSelect={() => onManageSubscription(branch)} className={itemClasses}>
-                                <CreditCard className="h-4 w-4" aria-hidden="true" />
-                                Manage subscription
-                            </DropdownMenu.Item>
-                        )}
 
                         <DropdownMenu.Separator className="my-1 h-px bg-border" />
 
@@ -156,15 +140,10 @@ function BranchActionsMenu({
 export function BranchesTable({
     branches,
     isLoading = false,
-    usage = [],
-    onManageSubscription,
     onView,
     onEdit,
     onDelete,
 }: BranchesTableProps): JSX.Element {
-    /** Look up a branch's subscription usage by id (falls back to a blank entry). */
-    const usageFor = (branch: Branch): BranchUsageItem | undefined =>
-        usage.find((item) => String(item.id) === String(branch.id));
     const columns: ColumnDef<Branch>[] = [
         {
             id: 'name',
@@ -248,30 +227,6 @@ export function BranchesTable({
             cell: ({ row }) => <BranchStatusBadge status={row.original.status} />,
         },
         {
-            id: 'subscription',
-            accessorFn: (branch) => (usageFor(branch)?.active ? 'Active' : 'Inactive'),
-            header: 'Subscription',
-            cell: ({ row }) => {
-                const item = usageFor(row.original);
-                if (!item) {
-                    return (
-                        <span className="text-xs text-muted-foreground">—</span>
-                    );
-                }
-                return (
-                    <div className="flex items-center gap-2">
-                        <Badge variant={item.active ? 'success' : 'neutral'}>{item.active ? 'Active' : 'Inactive'}</Badge>
-                        {item.active && (
-                            <span className="whitespace-nowrap text-xs text-muted-foreground">
-                                {item.employeesUsed} / {formatCapacity(item.employeeCapacity)} employees
-                            </span>
-                        )}
-                    </div>
-                );
-            },
-            meta: { headerClassName: 'hidden lg:table-cell', cellClassName: 'hidden lg:table-cell' },
-        },
-        {
             id: 'actions',
             header: '',
             enableHiding: false,
@@ -281,7 +236,6 @@ export function BranchesTable({
                         branch={row.original}
                         onView={onView}
                         onEdit={onEdit}
-                        onManageSubscription={onManageSubscription}
                         onDelete={onDelete}
                     />
                 </div>

@@ -230,15 +230,17 @@ export interface CreateEmployeeInput {
 /**
  * Payload accepted when editing an existing employee from the row menu.
  *
- * Only profile fields live here — the login role is changed through the invite
- * dialog (and the dedicated role endpoint) because it also decides which
- * onboarding email a person receives.
+ * The login role is editable here alongside the profile. It lives on the linked
+ * user account (not the employee row), so `EmployeeService::update()` applies
+ * it to that user in the same transaction as the profile save.
  */
 export interface UpdateEmployeeInput {
     /** Given name. */
     firstName: string;
     /** Family name. */
     lastName: string;
+    /** Access level for the linked login account. */
+    role: EmployeeRole;
     /** Position (job title) record id, or empty string when not assigned. */
     positionId: string;
     /** Department record id, or empty string when not assigned. */

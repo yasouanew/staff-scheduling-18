@@ -47,21 +47,22 @@ class EmployeeInvitationController extends Controller
         );
     }
 
-    /**
-     * Revoke the employee's outstanding invitation.
-     */
-    public function destroy(Employee $employee): JsonResponse
-    {
-        $this->authorize('update', $employee);
-
-        $invitation = $employee->invitation;
-
-        if ($invitation === null) {
-            return $this->errorResponse('This employee has no outstanding invitation.', 404);
-        }
-
-        $this->invitations->revoke($invitation);
-
-        return $this->successResponse(null, 'Invitation revoked successfully.');
-    }
+    // Revoke invite feature disabled.
+    // /**
+    //  * Revoke the employee's outstanding invitation.
+    //  */
+    // public function destroy(Employee $employee): JsonResponse
+    // {
+    //     $this->authorize('update', $employee);
+    //
+    //     $invitation = $employee->invitation;
+    //
+    //     if ($invitation === null) {
+    //         return $this->errorResponse('This employee has no outstanding invitation.', 404);
+    //     }
+    //
+    //     $this->invitations->revoke($invitation);
+    //
+    //     return $this->successResponse(null, 'Invitation revoked successfully.');
+    // }
 }
