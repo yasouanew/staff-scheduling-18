@@ -56,6 +56,7 @@ class ApplyRosterChangesRequest extends FormRequest
             'mutations.*.shift.break_minutes' => ['nullable', 'integer', 'min:0'],
             'mutations.*.shift.paid_break' => ['nullable', 'boolean'],
             'mutations.*.shift.required_staff' => ['nullable', 'integer', 'min:1', 'max:99'],
+            'mutations.*.shift.status' => ['nullable', 'string', Rule::in(['scheduled', 'completed', 'cancelled', 'swap_requested'])],
             'mutations.*.shift.notes' => ['nullable', 'string', 'max:1000'],
         ];
     }

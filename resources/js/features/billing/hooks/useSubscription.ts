@@ -368,16 +368,18 @@ async function fetchPlans(): Promise<ManagementPlan[]> {
 /** GET /subscription/usage — current branch + per-branch employee usage. */
 async function fetchUsage(): Promise<UsageOverview> {
     const response = await apiClient.get<ApiSuccessResponse<UsageOverviewDto>>('/subscription/usage');
+    const raw = response.data?.data;
+    const rawBranchList = raw?.branches_usage ?? (raw as unknown as Record<string, unknown>)?.branch_usage ?? [];
     return {
         seats: {
-            used: number(response.data.data.seats.used),
-            limit: response.data.data.seats.limit,
+            used: number(raw?.seats?.used),
+            limit: raw?.seats?.limit ?? null,
         },
         branches: {
-            used: number(response.data.data.branches.used),
-            limit: response.data.data.branches.limit,
+            used: number(raw?.branches?.used),
+            limit: raw?.branches?.limit ?? null,
         },
-        branchesUsage: response.data.data.branches_usage.map(mapBranchUsage),
+        branchesUsage: Array.isArray(rawBranchList) ? rawBranchList.map(mapBranchUsage) : [],
     };
 }
 
@@ -411,7 +413,11 @@ export interface PlanChangeResult {
     planChanged: boolean;
     /** Immediate proration charge for an upgrade (rest of the money). */
     charge: { amount: number; currency: string; reference: string | null; payment_intent: string | null } | null;
-    /** Cash refund issued for a downgrade (prorated difference). */
+    /**
+     * Cash refund issued for a plan change. Downgrades no longer issue a cash
+     * refund (the unused credit carries to the next renewal), so this is
+     * always null for a downgrade.
+     */
     refund: { amount: number; currency: string; refund_id: string | null } | null;
     /** Hosted Checkout URL when the upgrade must be paid first (no card on file). */
     checkoutUrl: string | null;

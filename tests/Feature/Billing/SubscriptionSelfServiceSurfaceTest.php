@@ -167,11 +167,6 @@ class SubscriptionSelfServiceSurfaceTest extends TestCase
         return $user;
     }
 
-    protected function activateBranchViaApi(Branch $branch): void
-    {
-        $this->postJson("/api/v1/branches/{$branch->id}/activate")->assertOk();
-    }
-
     /**
      * Creates active member accounts (each consuming a seat) assigned to a
      * branch, plus their employee rows. Every linked user must have the
@@ -280,11 +275,13 @@ class SubscriptionSelfServiceSurfaceTest extends TestCase
 
         $this->actingAsCompanyAdmin($company);
 
-        // 6 active branches exceed the target's 3-branch allowance.
-        for ($i = 0; $i < 6; $i++) {
-            $branch = Branch::factory()->create(['company_id' => $company->id]);
-            $this->activateBranchViaApi($branch);
-        }
+        // 6 active branches exceed the target's 3-branch allowance. The
+        // allowance counts rows on the `branches` table, so the branches are
+        // created active — no lifecycle endpoint is involved.
+        Branch::factory()->count(6)->create([
+            'company_id' => $company->id,
+            'status' => 'active',
+        ]);
 
         $this->postJson('/api/v1/subscription/checkout', [
             'plan_id' => $target->id,
@@ -494,8 +491,7 @@ class SubscriptionSelfServiceSurfaceTest extends TestCase
 
         // The acting admin + 3 active member accounts = 4 active seats, which
         // exceeds the target plan's 2-seat allowance. The branch only needs to
-        // exist (as a foreign key for the employee rows) — activation requires
-        // an entitled subscription a trial company does not have yet.
+        // exist as a foreign key for the employee rows.
         $branch = Branch::factory()->create(['company_id' => $company->id]);
         $this->createActiveMemberSeats($company, $branch, 3);
 

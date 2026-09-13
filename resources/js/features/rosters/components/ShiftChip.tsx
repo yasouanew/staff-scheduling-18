@@ -74,8 +74,8 @@ export function ShiftChip({
                     </p>
                 </div>
 
-                {/* Quick actions: revealed on hover, always available to keyboards. */}
-                <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/chip:opacity-100 focus-within:opacity-100">
+                {/* Quick actions: hover-reveal on desktop, always visible on touch (no hover). */}
+                <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/chip:opacity-100 focus-within:opacity-100 max-md:opacity-100">
                     <button
                         type="button"
                         onClick={() => onEdit(shift)}

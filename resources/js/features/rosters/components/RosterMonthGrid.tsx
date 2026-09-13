@@ -1,3 +1,5 @@
+import { format, parseISO } from 'date-fns';
+
 import { cn } from '@/lib/utils';
 import type { Shift } from '@/types/shift';
 
@@ -13,7 +15,11 @@ import { RosterMonthCell } from './RosterMonthCell';
 
 interface RosterMonthGridProps {
     weeks: CalendarWeek[];
-    /** `branches` for the month view, `shifts` for week/day. */
+    /**
+     * Cell granularity. The calendar passes `branches` for every view so month,
+     * week and day share one feature set; `shifts` remains available for callers
+     * that want a raw per-shift listing.
+     */
     contentMode: CellContentMode;
     showBranchNames: boolean;
     isPasteArmed: boolean;
@@ -138,14 +144,12 @@ export function RosterMonthGrid({
                 </div>
             </div>
 
-            {/* Mobile: agenda list (a 7-column grid is unusable under ~640px) */}
+            {/* Mobile: agenda list (a 7-column grid is unusable under ~640px). Shows every in-period day so empty days stay actionable. */}
             <div className="space-y-4 md:hidden">
                 {weeks.map((week) => {
-                    const daysWithShifts = week.days.filter(
-                        (day) => day.isCurrentPeriod && day.shifts.length > 0,
-                    );
+                    const visibleDays = week.days.filter((day) => day.isCurrentPeriod);
 
-                    if (daysWithShifts.length === 0) return null;
+                    if (visibleDays.length === 0) return null;
 
                     return (
                         <section key={week.weekStart} className="space-y-2">
@@ -162,37 +166,65 @@ export function RosterMonthGrid({
                                 </span>
                             </button>
 
-                            {daysWithShifts.map((day) => (
-                                <article
-                                    key={day.date}
-                                    className={cn(
-                                        'rounded-xl border border-border bg-card p-3 shadow-sm',
-                                        day.isToday && 'border-primary',
-                                    )}
-                                >
-                                    <RosterMonthCell
-                                        day={day}
-                                        contentMode={contentMode}
-                                        showBranchNames={showBranchNames}
-                                        isPasteArmed={isPasteArmed}
-                                        isSelected={selectedDates.has(day.date)}
-                                        isCopySource={copySourceDate === day.date}
-                                        onAddShift={onAddShift}
-                                        onCopy={onCopy}
-                                        onPaste={onPaste}
-                                        onEditShift={onEditShift}
-                                        onDeleteShift={onDeleteShift}
-                                        onToggleSelect={onToggleSelect}
-                                        onViewDay={onViewDay}
-                                        onViewRoster={onViewRoster}
-                                        onEditBranchDay={onEditBranchDay}
-                                        onDeleteBranchDay={onDeleteBranchDay}
-                                        onViewAllBranches={onViewAllBranches}
-                                    />
-
-
-                                </article>
-                            ))}
+                            {visibleDays.map((day) => {
+                                const dayLabel = format(parseISO(day.date), 'EEEE d MMM');
+                                const isEmpty = day.shifts.length === 0;
+                                return (
+                                    <article
+                                        key={day.date}
+                                        className={cn(
+                                            'rounded-xl border border-border bg-card p-3 shadow-sm',
+                                            day.isToday && 'border-primary',
+                                            isEmpty && 'border-dashed',
+                                        )}
+                                    >
+                                        <div className="mb-2 flex items-center justify-between gap-2">
+                                            <p className="text-sm font-semibold text-foreground">
+                                                {dayLabel}
+                                                {day.isToday ? (
+                                                    <span className="ml-2 rounded-full bg-primary px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground">
+                                                        Today
+                                                    </span>
+                                                ) : null}
+                                            </p>
+                                            <span
+                                                className={cn(
+                                                    'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium',
+                                                    isEmpty
+                                                        ? 'bg-secondary text-muted-foreground'
+                                                        : 'bg-primary/10 text-primary',
+                                                )}
+                                            >
+                                                {isEmpty ? 'No shifts' : `${day.shifts.length} shift${day.shifts.length === 1 ? '' : 's'}`}
+                                            </span>
+                                        </div>
+                                        <RosterMonthCell
+                                            day={day}
+                                            contentMode={contentMode}
+                                            showBranchNames={showBranchNames}
+                                            isPasteArmed={isPasteArmed}
+                                            isSelected={selectedDates.has(day.date)}
+                                            isCopySource={copySourceDate === day.date}
+                                            onAddShift={onAddShift}
+                                            onCopy={onCopy}
+                                            onPaste={onPaste}
+                                            onEditShift={onEditShift}
+                                            onDeleteShift={onDeleteShift}
+                                            onToggleSelect={onToggleSelect}
+                                            onViewDay={onViewDay}
+                                            onViewRoster={onViewRoster}
+                                            onEditBranchDay={onEditBranchDay}
+                                            onDeleteBranchDay={onDeleteBranchDay}
+                                            onViewAllBranches={onViewAllBranches}
+                                        />
+                                        {isEmpty ? (
+                                            <p className="mt-2 rounded-lg bg-secondary/50 px-3 py-2 text-center text-xs text-muted-foreground">
+                                                Empty — use + to add shifts or paste a copied day.
+                                            </p>
+                                        ) : null}
+                                    </article>
+                                );
+                            })}
                         </section>
                     );
                 })}

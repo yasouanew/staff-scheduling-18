@@ -71,7 +71,7 @@ const STATUS_FILTERS: readonly { value: '' | ShiftStatus; label: string }[] = [
  * Roster calendar: a month/week/day canvas over every branch's shifts.
  *
  * The page owns all state and data access; the grid, cells and chips beneath it
- * stay purely presentational. Two structural decisions drive the design:
+ * stay purely presentational. Three structural decisions drive the design:
  *
  * - **Shifts, not rosters, are the unit of display.** Rosters are stored per
  *   branch per ISO week, so a *day* cell can only ever be a projection over
@@ -79,6 +79,9 @@ const STATUS_FILTERS: readonly { value: '' | ShiftStatus; label: string }[] = [
  *   `(branch, date)` back onto the owning roster week.
  * - **The visible range drives the query.** Month view fetches the padded grid so
  *   adjacent-month cells are populated rather than deceptively empty.
+ * - **Every view aggregates to branches.** Month, week and day all render one
+ *   chip per branch so they share the roster drill-down, branch-day editor and
+ *   `+N more` list; only the number of columns differs between them.
  */
 export default function RosterCalendarPage(): JSX.Element {
     const navigate = useNavigate();
@@ -90,7 +93,6 @@ export default function RosterCalendarPage(): JSX.Element {
 
     const [wizardDate, setWizardDate] = useState<string | null>(null);
     const [shiftPendingDelete, setShiftPendingDelete] = useState<Shift | null>(null);
-    const [draggedShift, setDraggedShift] = useState<Shift | null>(null);
     const [isBulkSaving, setIsBulkSaving] = useState(false);
 
     const [branchDayEditing, setBranchDayEditing] = useState<BranchDayTarget | null>(null);
@@ -161,12 +163,15 @@ export default function RosterCalendarPage(): JSX.Element {
     }, [view, cursor, shifts, branchIds, range.start]);
 
     /**
-     * A month cell is too small to read individual shifts, so the month view
-     * aggregates each day to one row per branch and answers "is this branch
-     * covered?". Week and day views have the room for per-shift detail, which is
-     * also where editing, dragging and deleting stay available.
+     * Month, week and day all answer the same question — "which branches are
+     * covered this day?" — so every view aggregates a day to one chip per branch.
+     *
+     * Branch aggregation is what carries the whole feature set: the roster
+     * drill-down, the branch-day editor, clearing a branch-day, and the `+N more`
+     * branch list. Rendering raw shifts in week/day instead silently dropped all
+     * of those, so the mode is fixed rather than derived from the view.
      */
-    const contentMode: CellContentMode = view === 'month' ? 'branches' : 'shifts';
+    const contentMode: CellContentMode = 'branches';
 
     /* ---------------------------------------------------------------------- */
     /* Mutations                                                              */
@@ -305,43 +310,6 @@ export default function RosterCalendarPage(): JSX.Element {
             }
         },
         [clipboard, createShift, resolveRoster],
-    );
-
-    const handleDropShift = useCallback(
-        async (date: string): Promise<void> => {
-            const shift = draggedShift;
-            setDraggedShift(null);
-
-            if (!shift || shift.date === date) return;
-
-            try {
-                // Moving across an ISO week boundary changes the owning roster, so
-                // the target roster is resolved rather than assumed.
-                const rosterId = shift.branchId
-                    ? await resolveRoster(shift.branchId, date)
-                    : shift.rosterId;
-
-                await updateShift.mutateAsync({
-                    id: shift.id,
-                    input: {
-                        rosterId,
-                        date,
-                        startTime: shift.startTime,
-                        endTime: shift.endTime,
-                        employeeId: shift.employeeId,
-                        positionId: shift.positionId,
-                        requiredStaff: shift.requiredStaff,
-                        notes: shift.notes,
-                        status: shift.status,
-                    },
-                });
-
-                toast.success('Shift moved');
-            } catch {
-                toast.error('Could not move the shift. It may conflict with an existing shift.');
-            }
-        },
-        [draggedShift, resolveRoster, updateShift],
     );
 
     const handleConfirmDelete = useCallback(async (): Promise<void> => {
@@ -507,7 +475,7 @@ export default function RosterCalendarPage(): JSX.Element {
             <PageHeader
                 eyebrow="Scheduling"
                 title="Roster calendar"
-                description="Plan shifts across every branch. Click a day to add shifts, copy a day onto others, or drag a shift to reschedule it."
+                description="Plan shifts across every branch. Click a day to add shifts, or copy a day onto others."
                 actions={
                     <div className="flex flex-wrap items-center gap-2">
                         <label htmlFor="branch-filter" className="sr-only">
@@ -672,16 +640,6 @@ export default function RosterCalendarPage(): JSX.Element {
                             setCursor(parseISO(weekStart));
                             setView('week');
                         }}
-                        // Month cells show aggregated branches, not draggable
-                        // shift chips, so drag-to-reschedule is only wired up
-                        // where an individual shift is actually rendered.
-                        {...(contentMode === 'shifts'
-                            ? {
-                                onShiftDragStart: setDraggedShift,
-                                onShiftDragEnd: () => setDraggedShift(null),
-                                onDropShift: (date: string) => void handleDropShift(date),
-                            }
-                            : {})}
                     />
 
                     {/* An empty month is a legitimate state, not an error. */}

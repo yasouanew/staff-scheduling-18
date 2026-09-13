@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 
 import { LoadingSpinner } from '@/Components/common/LoadingSpinner';
 import { useEmployees } from '@/features/employees/hooks/useEmployees';
-import { getApiErrorMessage } from '@/lib/api-client';
+import { getApiErrorMessage, getApiFieldError } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 import {
     BRANCH_STATUS_LABELS,
@@ -69,6 +69,7 @@ export function BranchFormModal({
         register,
         handleSubmit,
         reset,
+        setError,
         watch,
         formState: { errors, isSubmitting },
     } = useForm<BranchFormInput, unknown, BranchFormValues>({
@@ -102,8 +103,17 @@ export function BranchFormModal({
             onSaved?.(saved);
             onOpenChange(false);
         } catch (error) {
+            // A duplicate name is a *field* problem, so it belongs next to the
+            // name input rather than only in a toast that disappears.
+            const nameError = getApiFieldError(error, 'name');
+
+            if (nameError) {
+                setError('name', { type: 'server', message: nameError });
+            }
+
             toast.error(isEdit ? 'Unable to update branch' : 'Unable to create branch', {
-                description: getApiErrorMessage(error, 'Please review the form and try again.'),
+                description:
+                    nameError ?? getApiErrorMessage(error, 'Please review the form and try again.'),
             });
         }
     });

@@ -91,16 +91,35 @@ export function RostersListPage(): JSX.Element {
 
     const handleDelete = (roster: Roster): void => {
         const label = formatWeekRange(roster.weekStart, roster.weekEnd);
+        const isPublished = roster.status === 'published';
 
         deleteRoster.mutate(roster.id, {
-            onSuccess: () =>
+            onSuccess: (result) => {
+                if (isPublished) {
+                    const count =
+                        typeof result?.changeCount === 'number' ? result.changeCount : 0;
+                    toast.success(
+                        count > 0 ? 'Published roster cancelled' : 'Roster already cancelled',
+                        {
+                            description:
+                                count > 0
+                                    ? `All ${count} ${count === 1 ? 'shift' : 'shifts'} for the week of ${label} were moved to cancelled and affected staff were notified.`
+                                    : `The week of ${label} had no active shifts to cancel.`,
+                        },
+                    );
+                    return;
+                }
                 toast.success('Roster deleted', {
                     description: `The week of ${label} has been removed.`,
-                }),
+                });
+            },
             onError: (error) =>
-                toast.error('Unable to delete roster', {
-                    description: schedulingErrorMessage(error, 'Please try again.'),
-                }),
+                toast.error(
+                    isPublished ? 'Unable to cancel roster shifts' : 'Unable to delete roster',
+                    {
+                        description: schedulingErrorMessage(error, 'Please try again.'),
+                    },
+                ),
         });
     };
 

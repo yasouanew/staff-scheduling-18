@@ -61,6 +61,7 @@ function RosterActionsMenu({
 
     const weekLabel = formatWeekRange(roster.weekStart, roster.weekEnd);
     const canPublish = roster.status === 'draft';
+    const isPublished = roster.status === 'published';
 
     const itemClasses =
         'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none transition-colors focus:bg-accent focus:text-accent-foreground';
@@ -113,7 +114,7 @@ function RosterActionsMenu({
                             className={cn(itemClasses, 'text-danger focus:bg-danger/10')}
                         >
                             <Trash2 className="h-4 w-4" aria-hidden="true" />
-                            Delete roster
+                            {isPublished ? 'Cancel shifts' : 'Delete roster'}
                         </DropdownMenu.Item>
                     </DropdownMenu.Content>
                 </DropdownMenu.Portal>
@@ -151,17 +152,20 @@ function RosterActionsMenu({
                 </AlertDialog.Portal>
             </AlertDialog.Root>
 
-            {/* Delete confirmation — destructive and irreversible. */}
+            {/* Delete confirmation — published rosters cancel + notify (revertable), drafts hard-delete. */}
             <AlertDialog.Root open={confirmDelete} onOpenChange={setConfirmDelete}>
                 <AlertDialog.Portal>
                     <AlertDialog.Overlay className="fixed inset-0 z-50 bg-foreground/40 backdrop-blur-sm" />
                     <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-card p-6 shadow-xl focus:outline-none">
                         <AlertDialog.Title className="text-lg font-semibold text-foreground">
-                            Delete the week of {weekLabel}?
+                            {isPublished
+                                ? `Cancel all shifts for the week of ${weekLabel}?`
+                                : `Delete the week of ${weekLabel}?`}
                         </AlertDialog.Title>
                         <AlertDialog.Description className="mt-2 text-sm text-muted-foreground">
-                            This permanently removes the roster and every shift inside it. This
-                            action cannot be undone.
+                            {isPublished
+                                ? 'This moves every active shift to cancelled (red left border), records a change per shift and notifies affected staff. You can revert any shift later by reopening it and switching the status back — the roster itself is kept.'
+                                : 'This permanently removes the roster and every shift inside it. This action cannot be undone.'}
                         </AlertDialog.Description>
                         <div className="mt-6 flex justify-end gap-3">
                             <AlertDialog.Cancel asChild>
@@ -175,7 +179,7 @@ function RosterActionsMenu({
                                     onClick={() => onDelete(roster)}
                                     className="inline-flex h-10 items-center justify-center rounded-lg bg-danger px-4 text-sm font-semibold text-danger-foreground transition-colors hover:bg-danger/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                                 >
-                                    Delete roster
+                                    {isPublished ? 'Cancel shifts & notify' : 'Delete roster'}
                                 </button>
                             </AlertDialog.Action>
                         </div>

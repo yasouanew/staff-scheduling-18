@@ -84,7 +84,10 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         return $query
             ->when($companyId !== null, fn (Builder $q) => $q->where('company_id', $companyId))
-            ->where('role', '!=', 'super_admin')
+            ->where(function (Builder $q) {
+                $q->where('role', '!=', 'super_admin')
+                    ->orWhereNull('role');
+            })
             ->where('status', 'active')
             ->when($exclude !== null, fn (Builder $q) => $q->whereKeyNot($exclude->getKey()));
     }

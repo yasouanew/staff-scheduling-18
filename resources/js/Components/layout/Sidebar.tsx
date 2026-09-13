@@ -100,7 +100,7 @@ export function Sidebar({ collapsed = false, items, className, onToggleCollapse 
                 {!collapsed ? <span className="truncate text-base font-semibold tracking-tight text-foreground">Rosterly</span> : null}
             </div>
             <nav className={cn('flex-1 overflow-y-auto py-4', collapsed ? 'px-2' : 'px-3')}>
-                <ul className="space-y-1">
+                <ul className={cn(collapsed ? 'space-y-2' : 'space-y-1')}>
                     {items.map((item, index) => {
                         const previous = items[index - 1];
                         const showSection = !collapsed && item.section && previous?.section !== item.section;
@@ -111,7 +111,7 @@ export function Sidebar({ collapsed = false, items, className, onToggleCollapse 
                                     {item.section}
                                 </p>
                             ) : null}
-                            <div className={collapsed ? 'flex justify-center' : undefined}>
+                            <div className={collapsed ? 'flex justify-center py-0.5' : undefined}>
                                 <SidebarNavLink item={item} collapsed={collapsed} />
                             </div>
                         </li>;

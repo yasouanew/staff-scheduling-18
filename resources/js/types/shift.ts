@@ -123,5 +123,11 @@ export interface ShiftStats {
     total: number;
     open: number;
     assigned: number;
+    /** Raw scheduled duration before any breaks are deducted. */
     totalHours: number;
+    /**
+     * Paid hours after deducting unpaid breaks only. Paid breaks are included
+     * because the employee is still paid for that time.
+     */
+    paidHours: number;
 }

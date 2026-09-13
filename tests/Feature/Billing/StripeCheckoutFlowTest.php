@@ -166,10 +166,6 @@ class StripeCheckoutFlowTest extends TestCase
         return $user;
     }
 
-    protected function activateBranchViaApi(Branch $branch): void
-    {
-        $this->postJson("/api/v1/branches/{$branch->id}/activate")->assertOk();
-    }
 
     /**
      * Creates active member accounts (each consuming a seat) assigned to a
@@ -295,11 +291,13 @@ class StripeCheckoutFlowTest extends TestCase
 
         $this->actingAsCompanyAdmin($company);
 
-        // 6 active branches exceed the target's 3-branch allowance.
-        for ($i = 0; $i < 6; $i++) {
-            $branch = Branch::factory()->create(['company_id' => $company->id]);
-            $this->activateBranchViaApi($branch);
-        }
+        // 6 active branches exceed the target's 3-branch allowance. The
+        // allowance counts rows on the `branches` table, so the branches are
+        // created active — no lifecycle endpoint is involved.
+        Branch::factory()->count(6)->create([
+            'company_id' => $company->id,
+            'status' => 'active',
+        ]);
 
         $this->postJson("/api/v1/companies/{$company->id}/subscriptions", [
             'plan_id' => $target->id,
@@ -343,9 +341,8 @@ class StripeCheckoutFlowTest extends TestCase
             'stripe_monthly_price_id' => 'price_target_capacity_monthly',
         ]);
 
-        $branch = Branch::factory()->create(['company_id' => $company->id]);
+        $branch = Branch::factory()->create(['company_id' => $company->id, 'status' => 'active']);
         $this->actingAsCompanyAdmin($company);
-        $this->activateBranchViaApi($branch);
 
         // 40 active member accounts (each a seat) + the acting admin
         // => 41 active seats exceed the target's 25 capacity.
@@ -392,9 +389,8 @@ class StripeCheckoutFlowTest extends TestCase
             'stripe_monthly_price_id' => 'price_large_monthly',
         ]);
 
-        $branch = Branch::factory()->create(['company_id' => $company->id]);
+        $branch = Branch::factory()->create(['company_id' => $company->id, 'status' => 'active']);
         $this->actingAsCompanyAdmin($company);
-        $this->activateBranchViaApi($branch);
         Employee::factory()->count(5)->create([
             'company_id' => $company->id,
             'branch_id' => $branch->id,

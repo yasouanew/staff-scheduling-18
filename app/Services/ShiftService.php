@@ -13,6 +13,7 @@ use App\Notifications\ShiftAssignedNotification;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 
 
@@ -46,19 +47,69 @@ class ShiftService
     /**
      * Create a new shift.
      *
+     * Enforces the month-grid branch-day rule: one branch may only occupy a
+     * calendar day once. If an active (non-cancelled) shift already exists for
+     * the same `branch_id` + `date`, the create is rejected with 422 so the
+     * caller edits that branch-day instead of opening a duplicate. Shifts with
+     * no branch (`null`) live in the "unassigned" bucket and are exempt.
+     *
      * @param  array<string, mixed>  $data
      */
     public function create(array $data): Shift
     {
         return DB::transaction(function () use ($data) {
             $data['status'] ??= 'scheduled';
+            $scoped = $this->inheritRosterScope($data);
 
-            return Shift::create($this->inheritRosterScope($data))->refresh();
+            $this->assertBranchDayAvailable(
+                $scoped['branch_id'] ?? null,
+                $scoped['date'] ?? null,
+            );
+
+            return Shift::create($scoped)->refresh();
+        });
+    }
+
+    /**
+     * Create a whole branch-day in one atomic batch.
+     *
+     * The Add-Shift wizard creates N shifts (one per employee) for a single
+     * `(branch, date)`. Checking the branch-day rule once per batch — instead
+     * of once per shift — lets the initial multi-employee burst succeed while
+     * still rejecting a second wizard run on an already-covered day with 422.
+     * Either all shifts are created or none are.
+     *
+     * @param  array<string, mixed>  $common  Shared attributes (roster_id, date, ...).
+     * @param  list<array<string, mixed>>  $shifts  Per-shift attributes.
+     * @return list<Shift>
+     */
+    public function createMany(array $common, array $shifts): array
+    {
+        return DB::transaction(function () use ($common, $shifts) {
+            $first = $this->inheritRosterScope(array_merge($common, $shifts[0] ?? []));
+            $branchId = $first['branch_id'] ?? null;
+            $date = $first['date'] ?? $common['date'] ?? null;
+
+            $this->assertBranchDayAvailable($branchId, $date);
+
+            $created = [];
+            foreach ($shifts as $item) {
+                $merged = $this->inheritRosterScope(array_merge($common, $item));
+                $merged['status'] ??= 'scheduled';
+                $created[] = Shift::create($merged)->refresh();
+            }
+
+            return $created;
         });
     }
 
     /**
      * Update an existing shift.
+     *
+     * Edits *within* the same branch-day (same branch + date, e.g. changing
+     * times or assignee while colleagues remain on that day) are always
+     * allowed. Moving a shift onto a *different* branch-day that is already
+     * covered by another active shift is rejected with 422.
      *
      * @param  array<string, mixed>  $data
      */
@@ -67,10 +118,70 @@ class ShiftService
         return DB::transaction(function () use ($shift, $data) {
             // Moving a shift to a roster in another branch must carry the branch
             // across, otherwise the shift would keep pointing at its old one.
-            $shift->update($this->inheritRosterScope($data));
+            $scoped = $this->inheritRosterScope($data);
+
+            $targetBranchId = $scoped['branch_id'] ?? $shift->branch_id;
+            $targetDate = $scoped['date'] ?? $shift->getAttribute('date');
+
+            // `date` casts to Carbon — normalise both sides to Y-m-d for compare.
+            $targetDateString = $targetDate instanceof \DateTimeInterface
+                ? $targetDate->format('Y-m-d')
+                : (is_string($targetDate) ? substr($targetDate, 0, 10) : null);
+            $currentDateString = $shift->getAttribute('date') instanceof \DateTimeInterface
+                ? $shift->getAttribute('date')->format('Y-m-d')
+                : (is_string($shift->getAttribute('date')) ? substr((string) $shift->getAttribute('date'), 0, 10) : null);
+
+            $isSameBranchDay = (int) $targetBranchId === (int) $shift->branch_id
+                && $targetDateString !== null
+                && $targetDateString === $currentDateString;
+
+            if (! $isSameBranchDay) {
+                $this->assertBranchDayAvailable($targetBranchId, $targetDateString, $shift->id);
+            }
+
+            $shift->update($scoped);
 
             return $shift->refresh();
         });
+    }
+
+    /**
+     * Whether a branch-day cell already has active shifts.
+     */
+    protected function branchDayCovered(mixed $branchId, mixed $date, ?int $ignoreShiftId = null): bool
+    {
+        if (empty($branchId) || empty($date)) {
+            return false;
+        }
+
+        $dateString = $date instanceof \DateTimeInterface
+            ? $date->format('Y-m-d')
+            : substr((string) $date, 0, 10);
+
+        return Shift::query()
+            ->where('branch_id', $branchId)
+            ->whereDate('date', $dateString)
+            ->where('status', '!=', 'cancelled')
+            ->when($ignoreShiftId !== null, fn ($q) => $q->where('id', '!=', $ignoreShiftId))
+            ->exists();
+    }
+
+    /**
+     * Reject with 422 when the target branch-day is already covered.
+     *
+     * Mirrors the frontend month-grid rule (`coveredBranchIds` disables the
+     * branch in Step 1): the correction path is editing that branch-day, not
+     * creating a second one on top of it.
+     *
+     * @throws \Illuminate\Validation\ValidationException
+     */
+    protected function assertBranchDayAvailable(mixed $branchId, mixed $date, ?int $ignoreShiftId = null): void
+    {
+        if ($this->branchDayCovered($branchId, $date, $ignoreShiftId)) {
+            throw ValidationException::withMessages([
+                'branch_id' => ['This branch already has shifts on this day. Edit that branch day instead of adding a duplicate.'],
+            ]);
+        }
     }
 
     /**

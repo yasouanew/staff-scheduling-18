@@ -75,11 +75,6 @@ class TrialLifecycleTest extends TestCase
         return [$company, $plan, $subscription];
     }
 
-    protected function activateBranchViaApi(Branch $branch): void
-    {
-        $this->postJson("/api/v1/branches/{$branch->id}/activate")->assertOk();
-    }
-
     // ─────────────────────────────────────────────────────────────────────
     // TRIAL REMINDERS (staggered 7/3/1)
     // ─────────────────────────────────────────────────────────────────────
@@ -452,7 +447,7 @@ class TrialLifecycleTest extends TestCase
     {
         $company = Company::factory()->create();
         $plan = Plan::factory()->create(['max_employees' => 2]);
-        $subscription = Subscription::factory()->create([
+        Subscription::factory()->create([
             'company_id' => $company->id,
             'plan_id' => $plan->id,
             'status' => 'active',
@@ -461,12 +456,9 @@ class TrialLifecycleTest extends TestCase
 
         $this->actingAsCompanyAdmin($company);
 
+        // Capacity is enforced from the company plan: the branch itself needs
+        // no activation and no per-branch override.
         $branch = Branch::factory()->create(['company_id' => $company->id]);
-        $this->activateBranchViaApi($branch);
-
-        // Set branch capacity to 2
-        $branchSubscription = $branch->activeBranchSubscription();
-        $branchSubscription->update(['employee_capacity' => 2]);
 
         // Create 2 employees (should succeed)
         $this->postJson('/api/v1/employees', [
@@ -504,7 +496,7 @@ class TrialLifecycleTest extends TestCase
     {
         $company = Company::factory()->create();
         $plan = Plan::factory()->create(['max_employees' => 2]);
-        $subscription = Subscription::factory()->create([
+        Subscription::factory()->create([
             'company_id' => $company->id,
             'plan_id' => $plan->id,
             'status' => 'active',
@@ -514,10 +506,6 @@ class TrialLifecycleTest extends TestCase
         $this->actingAsCompanyAdmin($company);
 
         $branch = Branch::factory()->create(['company_id' => $company->id]);
-        $this->activateBranchViaApi($branch);
-
-        $branchSubscription = $branch->activeBranchSubscription();
-        $branchSubscription->update(['employee_capacity' => 2]);
 
         // Create 2 employees
         $this->postJson('/api/v1/employees', [
@@ -601,7 +589,10 @@ class TrialLifecycleTest extends TestCase
         $user->assignRole('company_admin');
         Sanctum::actingAs($user);
 
-        $this->postJson("/api/v1/branches/{$branch->id}/activate")
+        $this->getJson("/api/v1/branches/{$branch->id}")
+            ->assertForbidden();
+
+        $this->deleteJson("/api/v1/branches/{$branch->id}")
             ->assertForbidden();
     }
 
@@ -665,21 +656,21 @@ class TrialLifecycleTest extends TestCase
         $planA = Plan::factory()->create(['max_branches' => 3, 'max_employees' => 25]);
         $planB = Plan::factory()->create(['max_branches' => 1, 'max_employees' => 10]);
 
-        $subscription = Subscription::factory()->create([
+        Subscription::factory()->create([
             'company_id' => $company->id,
             'plan_id' => $planA->id,
             'status' => 'active',
             'ends_at' => now()->addMonth(),
         ]);
 
-        // Authenticate BEFORE activating branches so the API requests are authorized
         $this->actingAsCompanyAdmin($company);
 
-        // Activate 2 branches
-        $branch1 = Branch::factory()->create(['company_id' => $company->id]);
-        $branch2 = Branch::factory()->create(['company_id' => $company->id]);
-        $this->activateBranchViaApi($branch1);
-        $this->activateBranchViaApi($branch2);
+        // Two active branches; the branch allowance counts rows on the
+        // `branches` table, so no lifecycle endpoint is involved.
+        Branch::factory()->count(2)->create([
+            'company_id' => $company->id,
+            'status' => 'active',
+        ]);
 
         $this->postJson('/api/v1/subscription/downgrade', [
             'plan_id' => $planB->id,
@@ -689,14 +680,14 @@ class TrialLifecycleTest extends TestCase
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // BRANCH LIFECYCLE
+    // BRANCH PLAN ALLOWANCE
     // ─────────────────────────────────────────────────────────────────────
 
-    public function test_branch_lifecycle_create_activate_employees_capacity_deactivate_reactivate(): void
+    public function test_branch_lifecycle_create_employees_capacity_and_reactivate(): void
     {
         $company = Company::factory()->create();
         $plan = Plan::factory()->create(['max_branches' => 2, 'max_employees' => 5]);
-        $subscription = Subscription::factory()->create([
+        Subscription::factory()->create([
             'company_id' => $company->id,
             'plan_id' => $plan->id,
             'status' => 'active',
@@ -707,17 +698,18 @@ class TrialLifecycleTest extends TestCase
         $user->assignRole('company_admin');
         Sanctum::actingAs($user);
 
-        // Create branch
-        $branch = Branch::factory()->create(['company_id' => $company->id]);
+        // Create branch through the API: branches are active on creation.
+        $branchId = $this->postJson('/api/v1/branches', [
+            'name' => 'Capacity Branch',
+            'code' => 'CAP',
+            'status' => 'active',
+        ])->assertCreated()->json('data.id');
 
-        // Activate branch
-        $this->postJson("/api/v1/branches/{$branch->id}/activate")->assertOk();
-
-        // Add employees up to capacity (branch capacity defaults to plan max)
+        // Add employees up to the plan capacity (5).
         for ($i = 1; $i <= 5; $i++) {
             $this->postJson('/api/v1/employees', [
                 'company_id' => $company->id,
-                'branch_id' => $branch->id,
+                'branch_id' => $branchId,
                 'first_name' => 'Employee',
                 'last_name' => "{$i}",
                 'email' => "emp{$i}@example.com",
@@ -725,10 +717,10 @@ class TrialLifecycleTest extends TestCase
             ])->assertCreated();
         }
 
-        // Try to add 6th employee (should fail - capacity reached)
+        // The 6th employee exceeds the plan capacity.
         $this->postJson('/api/v1/employees', [
             'company_id' => $company->id,
-            'branch_id' => $branch->id,
+            'branch_id' => $branchId,
             'first_name' => 'Employee',
             'last_name' => 'Six',
             'email' => 'emp6@example.com',
@@ -737,26 +729,18 @@ class TrialLifecycleTest extends TestCase
             ->assertStatus(422)
             ->assertJsonPath('code', 'EMPLOYEE_CAPACITY_REACHED');
 
-        // Increase capacity (route is PUT branches/{branch}/capacity)
-        $this->putJson("/api/v1/branches/{$branch->id}/capacity", [
-            'employee_capacity' => 10,
-        ])->assertOk();
+        // Branches can be deactivated and reactivated through the directory.
+        $this->putJson("/api/v1/branches/{$branchId}", ['status' => 'inactive'])
+            ->assertOk();
 
-        // Now we can add more employees
-        $this->postJson('/api/v1/employees', [
-            'company_id' => $company->id,
-            'branch_id' => $branch->id,
-            'first_name' => 'Employee',
-            'last_name' => 'Six',
-            'email' => 'emp6@example.com',
-            'role' => 'employee',
-        ])->assertCreated();
+        $this->putJson("/api/v1/branches/{$branchId}", ['status' => 'active'])
+            ->assertOk();
 
-        // Deactivate branch
-        $this->postJson("/api/v1/branches/{$branch->id}/deactivate")->assertOk();
+        // An inactive branch stops counting toward the plan's branch allowance.
+        $this->putJson("/api/v1/branches/{$branchId}", ['status' => 'inactive'])
+            ->assertOk();
 
-        // Reactivate branch
-        $this->postJson("/api/v1/branches/{$branch->id}/activate")->assertOk();
+        $this->assertEquals(0, $company->branches()->where('status', 'active')->count());
     }
 
     // ─────────────────────────────────────────────────────────────────────

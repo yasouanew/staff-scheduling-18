@@ -198,7 +198,7 @@ class PlanChangePaymentTest extends TestCase
 
     /**
      * A provider-backed active subscription with a succeeded initial payment
-     * (the anchor any downgrade refund is issued against).
+     * (the anchor a downgrade would previously have issued a refund against).
      */
     private function makeProviderBackedSubscription(array $planOverrides = []): array
     {
@@ -329,10 +329,10 @@ class PlanChangePaymentTest extends TestCase
     }
 
     // ---------------------------------------------------------------------
-    // Downgrade: refund the difference
+    // Downgrade: apply the change, never refund the difference
     // ---------------------------------------------------------------------
 
-    public function test_downgrade_refunds_prorated_difference_and_records_refund_row(): void
+    public function test_downgrade_applies_the_change_and_issues_no_refund(): void
     {
         $fake = $this->fakeBillingProvider();
         [$company, $user, $currentPlan, $subscription] = $this->makeProviderBackedSubscription();
@@ -352,34 +352,37 @@ class PlanChangePaymentTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('data.plan_changed', true);
 
-        // Downgrade keeps provider prorations (the cash refund is issued here).
+        // The downgrade still happens: the swap keeps provider prorations
+        // (the unused credit carries to the next renewal).
+        $this->assertCount(1, $fake->swaps);
         $this->assertSame('create_prorations', $fake->swaps[0]['options']['proration_behavior']);
 
-        // Refund issued against the initial period's PaymentIntent, capped at
-        // what was actually paid (difference 10.00 < paid 29.00).
-        $this->assertCount(1, $fake->refunds);
-        $this->assertSame('pi_test_initial_1', $fake->refunds[0]['payment_intent']);
-        $this->assertEqualsWithDelta(10.00, $fake->refunds[0]['amount'], 0.001);
-
-        // The refund row is recorded and labeled.
-        $this->assertDatabaseHas('subscription_payments', [
-            'subscription_id' => $subscription->id,
-            'type' => 'refund',
-            'amount' => 10.00,
+        // The plan is applied locally.
+        $this->assertDatabaseHas('subscriptions', [
+            'id' => $subscription->id,
+            'plan_id' => $target->id,
         ]);
 
-        $this->assertEqualsWithDelta(10.00, (float) $response->json('data.refund.amount'), 0.001);
+        // NO cash refund is issued for the prorated difference.
+        $this->assertCount(0, $fake->refunds);
+        $this->assertDatabaseMissing('subscription_payments', [
+            'subscription_id' => $subscription->id,
+            'type' => 'refund',
+        ]);
+
+        // The response carries `refund => null`.
+        $this->assertNull($response->json('data.refund'));
 
         // Renewal date preserved.
         $this->assertTrue($subscription->fresh()->ends_at->equalTo($subscription->ends_at));
     }
 
-    public function test_downgrade_refund_never_exceeds_the_paid_amount(): void
+    public function test_downgrade_issues_no_refund_even_when_the_paid_amount_is_small(): void
     {
         $fake = $this->fakeBillingProvider();
 
         // Current plan is expensive but the business only ever paid 5.00 —
-        // the refund must cap at the paid amount, not the price difference.
+        // regardless of the price difference, no refund is issued.
         [, $user, , $subscription] = $this->makeProviderBackedSubscription([
             'price_monthly' => 100.00,
         ]);
@@ -397,11 +400,10 @@ class PlanChangePaymentTest extends TestCase
         Sanctum::actingAs($user);
         $this->postJson('/api/v1/subscription/downgrade', ['plan_id' => $target->id])->assertOk();
 
-        $this->assertCount(1, $fake->refunds);
-        $this->assertEqualsWithDelta(5.00, $fake->refunds[0]['amount'], 0.001);
+        $this->assertCount(0, $fake->refunds);
     }
 
-    public function test_downgrade_without_a_succeeded_payment_issues_no_refund(): void
+    public function test_downgrade_without_a_succeeded_payment_still_applies_with_no_refund(): void
     {
         $fake = $this->fakeBillingProvider();
         [$company, $user] = $this->makeProviderBackedSubscription();

@@ -1,5 +1,5 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { UserRoundPlus, Users, X } from 'lucide-react';
+import { Search, UserRoundPlus, Users, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import type { Employee } from '@/types/employee';
@@ -26,18 +26,49 @@ export function AddEmployeeModal({
 }: AddEmployeeModalProps): JSX.Element {
     const employeesQuery = useEmployees();
     const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [search, setSearch] = useState('');
 
-    // Reset the selection each time the dialog opens so a stale id never leaks
-    // into a later confirm.
     const employees = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
 
+    /**
+     * Case-insensitive filter across the fields a manager would actually search
+     * by. Matching name, position and email together means one box covers both
+     * "who is this?" and "find the barista" without a field picker.
+     */
+    const filteredEmployees = useMemo(() => {
+        const term = search.trim().toLowerCase();
+        if (!term) return employees;
+
+        return employees.filter(
+            (employee) =>
+                employee.name.toLowerCase().includes(term) ||
+                employee.position.toLowerCase().includes(term) ||
+                employee.email.toLowerCase().includes(term),
+        );
+    }, [employees, search]);
+
+    // Resolve against the full list, not the filtered one: a search that hides the
+    // selected row must not silently drop the pending selection.
     const selectedEmployee = useMemo(
         () => employees.find((employee) => employee.id === selectedId) ?? null,
         [employees, selectedId],
     );
 
+    const trimmedSearch = search.trim();
+
     return (
-        <Dialog.Root open={open} onOpenChange={onOpenChange}>
+        <Dialog.Root
+            open={open}
+            onOpenChange={(next) => {
+                // A fresh visit starts from the full list: a leftover query would
+                // silently hide everyone the manager is looking for.
+                if (!next) {
+                    setSearch('');
+                    setSelectedId(null);
+                }
+                onOpenChange(next);
+            }}
+        >
             <Dialog.Portal>
                 <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
                 <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-card shadow-xl focus:outline-none">
@@ -58,6 +89,24 @@ export function AddEmployeeModal({
                             <X className="h-4 w-4" aria-hidden="true" />
                         </Dialog.Close>
                     </div>
+
+                    {/* Search — only useful once there is something to search. */}
+                    {employees.length > 0 ? (
+                        <div className="relative border-b border-border px-5 py-3">
+                            <Search
+                                className="pointer-events-none absolute left-8 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                                aria-hidden="true"
+                            />
+                            <input
+                                type="search"
+                                value={search}
+                                onChange={(event) => setSearch(event.target.value)}
+                                placeholder="Search by name, role or email"
+                                aria-label="Search employees"
+                                className="h-10 w-full rounded-lg border border-input bg-card pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            />
+                        </div>
+                    ) : null}
 
                     {/* Body */}
                     <div className="flex-1 overflow-y-auto p-5">
@@ -80,9 +129,18 @@ export function AddEmployeeModal({
                                     place them on this roster.
                                 </p>
                             </div>
+                        ) : filteredEmployees.length === 0 ? (
+                            <div className="py-8 text-center">
+                                <p className="text-sm text-muted-foreground">
+                                    No employees match “{trimmedSearch}”.
+                                </p>
+                                <p className="mt-1 text-xs text-muted-foreground/70">
+                                    Try a different name, role or email.
+                                </p>
+                            </div>
                         ) : (
                             <ul className="space-y-1.5">
-                                {employees.map((employee) => {
+                                {filteredEmployees.map((employee) => {
                                     const isSelected = employee.id === selectedId;
                                     const isSelectable = employee.status === 'active';
 

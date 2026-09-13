@@ -1,4 +1,4 @@
-import { AlertTriangle, CalendarClock, Clock3, Plus, Users, UserCheck, UserRoundX } from 'lucide-react';
+import { AlertTriangle, CalendarClock, Clock3, Timer, Plus, Users, UserCheck, UserRoundX } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -49,6 +49,8 @@ export default function ShiftsListPage(): JSX.Element {
     const [branchId, setBranchId] = useState(ALL_VALUE);
     const [status, setStatus] = useState<ShiftStatus | typeof ALL_VALUE>(ALL_VALUE);
     const [dateFrom, setDateFrom] = useState('');
+    const [dateTo, setDateTo] = useState('');
+    const [search, setSearch] = useState('');
     const [formOpen, setFormOpen] = useState(false);
     const [editingShift, setEditingShift] = useState<Shift | null>(null);
     const [assigningShift, setAssigningShift] = useState<Shift | null>(null);
@@ -57,6 +59,7 @@ export default function ShiftsListPage(): JSX.Element {
         branchId: branchId === ALL_VALUE ? undefined : branchId,
         status: status === ALL_VALUE ? undefined : status,
         dateFrom: dateFrom || undefined,
+        dateTo: dateTo || undefined,
         perPage: 100,
     });
     const rostersQuery = useRosters({ perPage: 100 });
@@ -71,7 +74,31 @@ export default function ShiftsListPage(): JSX.Element {
 
     const shifts = useMemo(() => shiftQuery.data ?? [], [shiftQuery.data]);
     const employees = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
-    const stats = useMemo(() => deriveShiftStats(shifts), [shifts]);
+
+    /**
+     * Rows matching the free-text query. The query is mirrored from the table's
+     * toolbar so the summary cards always describe exactly what is on screen,
+     * and recompute on every keystroke rather than only on server-side filters.
+     */
+    const visibleShifts = useMemo(() => {
+        const query = search.trim().toLowerCase();
+
+        if (!query) {
+            return shifts;
+        }
+
+        return shifts.filter((shift) =>
+            [shift.employee?.name, shift.position?.name, shift.branch?.name]
+                .filter(Boolean)
+                .join(' ')
+                .toLowerCase()
+                .includes(query),
+        );
+    }, [search, shifts]);
+
+    // Stats intentionally derive from the filtered rows so any filter change —
+    // including typing in the search bar — updates the analysis live.
+    const stats = useMemo(() => deriveShiftStats(visibleShifts), [visibleShifts]);
     const isFormOpen = formOpen || editingShift !== null;
     const isReferenceLoading =
         rostersQuery.isLoading || employeesQuery.isLoading || positionsQuery.isLoading || branchesQuery.isLoading;
@@ -190,7 +217,7 @@ export default function ShiftsListPage(): JSX.Element {
                 </button>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
                 <StatCard
                     title="All Shifts"
                     value={stats.total}
@@ -221,6 +248,14 @@ export default function ShiftsListPage(): JSX.Element {
                     icon={Clock3}
                     tone="info"
                     description="Before breaks"
+                    isLoading={shiftQuery.isLoading}
+                />
+                <StatCard
+                    title="Scheduled Hours (After Break)"
+                    value={`${stats.paidHours.toFixed(1)}h`}
+                    icon={Timer}
+                    tone="primary"
+                    description="Paid hours, unpaid breaks removed"
                     isLoading={shiftQuery.isLoading}
                 />
             </div>
@@ -299,17 +334,33 @@ export default function ShiftsListPage(): JSX.Element {
                                 id="shift-date-filter"
                                 type="date"
                                 value={dateFrom}
+                                max={dateTo || undefined}
                                 onChange={(event) => setDateFrom(event.target.value)}
                                 className={selectClasses}
                             />
                         </div>
-                        {(branchId !== ALL_VALUE || status !== ALL_VALUE || dateFrom) && (
+                        <div className="w-full space-y-1.5 sm:w-48">
+                            <label htmlFor="shift-date-to-filter" className="block text-sm font-medium text-foreground">
+                                To date
+                            </label>
+                            <input
+                                id="shift-date-to-filter"
+                                type="date"
+                                value={dateTo}
+                                min={dateFrom || undefined}
+                                onChange={(event) => setDateTo(event.target.value)}
+                                className={selectClasses}
+                            />
+                        </div>
+                        {(branchId !== ALL_VALUE || status !== ALL_VALUE || dateFrom || dateTo || search) && (
                             <button
                                 type="button"
                                 onClick={() => {
                                     setBranchId(ALL_VALUE);
                                     setStatus(ALL_VALUE);
                                     setDateFrom('');
+                                    setDateTo('');
+                                    setSearch('');
                                 }}
                                 className="inline-flex h-10 items-center justify-center rounded-lg px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             >
@@ -319,8 +370,10 @@ export default function ShiftsListPage(): JSX.Element {
                     </div>
 
                     <ShiftsTable
-                        shifts={shifts}
+                        shifts={visibleShifts}
                         isLoading={shiftQuery.isLoading}
+                        searchValue={search}
+                        onSearchChange={setSearch}
                         onEdit={(shift) => setEditingShift(shift)}
                         onAssign={(shift) => setAssigningShift(shift)}
                         onDelete={handleDelete}

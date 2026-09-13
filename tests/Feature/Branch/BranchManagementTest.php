@@ -323,4 +323,98 @@ class BranchManagementTest extends TestCase
 
         $this->getJson('/api/v1/branches')->assertForbidden();
     }
+
+    /* ---------------------------------------------------------------------- */
+    /* Name uniqueness (scoped per company)                                   */
+    /* ---------------------------------------------------------------------- */
+
+    public function test_duplicate_branch_name_in_same_company_is_rejected(): void
+    {
+        $this->actingAsSuperAdmin();
+        $company = Company::factory()->create();
+        Branch::factory()->create(['company_id' => $company->id, 'name' => 'Bondi']);
+
+        $this->postJson('/api/v1/branches', [
+            'company_id' => $company->id,
+            'name' => 'Bondi',
+        ])->assertUnprocessable()->assertJsonValidationErrors('name');
+
+        $this->assertSame(1, Branch::where('company_id', $company->id)->where('name', 'Bondi')->count());
+    }
+
+    public function test_same_branch_name_is_allowed_in_a_different_company(): void
+    {
+        $this->actingAsSuperAdmin();
+        $first = Company::factory()->create();
+        $second = Company::factory()->create();
+        Branch::factory()->create(['company_id' => $first->id, 'name' => 'Bondi']);
+
+        $this->postJson('/api/v1/branches', [
+            'company_id' => $second->id,
+            'name' => 'Bondi',
+        ])->assertCreated();
+
+        $this->assertSame(1, Branch::where('company_id', $second->id)->where('name', 'Bondi')->count());
+    }
+
+    public function test_company_admin_duplicate_name_is_scoped_to_their_company(): void
+    {
+        $company = Company::factory()->create();
+        $otherCompany = Company::factory()->create();
+        // The same name already exists elsewhere; it must not block this company.
+        Branch::factory()->create(['company_id' => $otherCompany->id, 'name' => 'Bondi']);
+        $this->actingAsCompanyAdmin($company);
+
+        $this->postJson('/api/v1/branches', ['name' => 'Bondi', 'company_id' => $otherCompany->id])
+            ->assertCreated();
+
+        $this->assertDatabaseHas('branches', ['company_id' => $company->id, 'name' => 'Bondi']);
+
+        // A second attempt in their own company is now a duplicate.
+        $this->postJson('/api/v1/branches', ['name' => 'Bondi'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('name');
+    }
+
+    public function test_updating_a_branch_to_a_duplicate_name_is_rejected(): void
+    {
+        $this->actingAsSuperAdmin();
+        $company = Company::factory()->create();
+        Branch::factory()->create(['company_id' => $company->id, 'name' => 'Bondi']);
+        $branch = Branch::factory()->create(['company_id' => $company->id, 'name' => 'Manly']);
+
+        $this->putJson("/api/v1/branches/{$branch->id}", ['name' => 'Bondi'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('name');
+
+        $this->assertDatabaseHas('branches', ['id' => $branch->id, 'name' => 'Manly']);
+    }
+
+    public function test_a_branch_can_keep_its_own_name_on_update(): void
+    {
+        $this->actingAsSuperAdmin();
+        $company = Company::factory()->create();
+        $branch = Branch::factory()->create(['company_id' => $company->id, 'name' => 'Bondi']);
+
+        // Re-submitting the unchanged name must not be treated as a duplicate.
+        $this->putJson("/api/v1/branches/{$branch->id}", [
+            'name' => 'Bondi',
+            'phone' => '0290000000',
+        ])->assertOk()->assertJsonPath('data.name', 'Bondi');
+    }
+
+    public function test_same_name_can_be_used_by_branches_in_different_companies(): void
+    {
+        $this->actingAsSuperAdmin();
+        $first = Company::factory()->create();
+        $second = Company::factory()->create();
+        Branch::factory()->create(['company_id' => $first->id, 'name' => 'Bondi']);
+        $branch = Branch::factory()->create(['company_id' => $second->id, 'name' => 'Manly']);
+
+        // Renaming into another company's existing name is fine — uniqueness is
+        // per company, and the branch's own company has no "Bondi" yet.
+        $this->putJson("/api/v1/branches/{$branch->id}", ['name' => 'Bondi'])
+            ->assertOk()
+            ->assertJsonPath('data.name', 'Bondi');
+    }
 }

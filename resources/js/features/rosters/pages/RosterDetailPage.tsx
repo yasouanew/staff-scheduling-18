@@ -292,17 +292,39 @@ export function RosterDetailPage(): JSX.Element {
     };
 
     const handleDelete = (current: Roster): void => {
+        const isPublished = current.status === 'published';
         deleteRoster.mutate(current.id, {
-            onSuccess: () => {
+            onSuccess: (result) => {
+                setConfirmDelete(false);
+                if (isPublished) {
+                    const count =
+                        typeof result?.changeCount === 'number' ? result.changeCount : 0;
+                    toast.success(
+                        count > 0 ? 'Published roster cancelled' : 'Roster already cancelled',
+                        {
+                            description:
+                                count > 0
+                                    ? `All ${count} ${count === 1 ? 'shift' : 'shifts'} for the week of ${weekLabel} were moved to cancelled and affected staff were notified. Reopen any shift to revert it.`
+                                    : `The week of ${weekLabel} had no active shifts to cancel.`,
+                        },
+                    );
+                    void refetch();
+                    return;
+                }
                 toast.success('Roster deleted', {
                     description: `The week of ${weekLabel} has been removed.`,
                 });
                 navigate('/rosters');
             },
             onError: (error) =>
-                toast.error('Unable to delete roster', {
-                    description: schedulingErrorMessage(error, 'Please try again.'),
-                }),
+                toast.error(
+                    current.status === 'published'
+                        ? 'Unable to cancel roster shifts'
+                        : 'Unable to delete roster',
+                    {
+                        description: schedulingErrorMessage(error, 'Please try again.'),
+                    },
+                ),
         });
     };
 
@@ -398,17 +420,25 @@ export function RosterDetailPage(): JSX.Element {
         values: QuickShiftValues,
     ): Promise<void> => {
         const placement = { date: target.date, employeeId: target.employeeId };
-        const template: ShiftTemplateValues = { ...values, status: target.values.status };
+        // `values.status` comes straight from the quick editor's Status select,
+        // so a cancelled shift can be reverted (or any status changed) without
+        // leaving the roster grid.
+        const template: ShiftTemplateValues = { ...values };
 
         // Prevent duplicate shifts in the same cell: block any add/update whose
         // time range overlaps an existing shift (or staged shift) on the same
-        // date + employee, excluding the shift being edited itself.
-        if (target.employeeId !== null) {
+        // date + employee, excluding the shift being edited itself. Cancelled
+        // shifts never block — otherwise a revert would always conflict with
+        // the very shift being reverted, or with other cancelled blocks.
+        if (target.employeeId !== null && template.status !== 'cancelled') {
             const working = published.isPublished ? published.workingShifts : (roster?.shifts ?? []);
             const start = timeToMinutes(template.startTime) ?? 0;
             const end = timeToMinutes(template.endTime) ?? start;
 
             const overlaps = working.some((existing) => {
+                if (existing.status === 'cancelled') {
+                    return false;
+                }
                 if (existing.date !== target.date || existing.employeeId !== target.employeeId) {
                     return false;
                 }
@@ -813,17 +843,20 @@ export function RosterDetailPage(): JSX.Element {
                 </AlertDialog.Portal>
             </AlertDialog.Root>
 
-            {/* Delete confirmation */}
+            {/* Delete confirmation — published rosters cancel + notify (revertable), drafts hard-delete. */}
             <AlertDialog.Root open={confirmDelete} onOpenChange={setConfirmDelete}>
                 <AlertDialog.Portal>
                     <AlertDialog.Overlay className="fixed inset-0 z-50 bg-foreground/40 backdrop-blur-sm" />
                     <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-card p-6 shadow-xl focus:outline-none">
                         <AlertDialog.Title className="text-lg font-semibold text-foreground">
-                            Delete the week of {weekLabel}?
+                            {roster.status === 'published'
+                                ? `Cancel all shifts for the week of ${weekLabel}?`
+                                : `Delete the week of ${weekLabel}?`}
                         </AlertDialog.Title>
                         <AlertDialog.Description className="mt-2 text-sm text-muted-foreground">
-                            This permanently removes the roster and every shift inside it. This
-                            action cannot be undone.
+                            {roster.status === 'published'
+                                ? 'This moves every active shift to cancelled (red left border), records a change per shift and notifies affected staff. You can revert any shift later by reopening it and switching the status back — the roster itself is kept.'
+                                : 'This permanently removes the roster and every shift inside it. This action cannot be undone.'}
                         </AlertDialog.Description>
                         <div className="mt-6 flex justify-end gap-3">
                             <AlertDialog.Cancel asChild>
@@ -834,10 +867,17 @@ export function RosterDetailPage(): JSX.Element {
                             <AlertDialog.Action asChild>
                                 <button
                                     type="button"
+                                    disabled={deleteRoster.isPending}
                                     onClick={() => handleDelete(roster)}
-                                    className="inline-flex h-10 items-center justify-center rounded-lg bg-danger px-4 text-sm font-semibold text-danger-foreground transition-colors hover:bg-danger/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    className="inline-flex h-10 items-center justify-center rounded-lg bg-danger px-4 text-sm font-semibold text-danger-foreground transition-colors hover:bg-danger/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60"
                                 >
-                                    Delete roster
+                                    {deleteRoster.isPending
+                                        ? roster.status === 'published'
+                                            ? 'Cancelling…'
+                                            : 'Deleting…'
+                                        : roster.status === 'published'
+                                            ? 'Cancel shifts & notify'
+                                            : 'Delete roster'}
                                 </button>
                             </AlertDialog.Action>
                         </div>
@@ -861,7 +901,7 @@ export function RosterDetailPage(): JSX.Element {
                 onSave={changeSave.handleSave}
             />
 
-            {/* Single-shift delete confirmation (trash icon on a shift block) */}
+            {/* Single-shift delete confirmation (trash icon on a shift block) — published rosters cancel + notify. */}
             <AlertDialog.Root
                 open={shiftToDelete !== null}
                 onOpenChange={(next) => {
@@ -874,12 +914,16 @@ export function RosterDetailPage(): JSX.Element {
                     <AlertDialog.Overlay className="fixed inset-0 z-50 bg-foreground/40 backdrop-blur-sm" />
                     <AlertDialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-card p-6 shadow-xl focus:outline-none">
                         <AlertDialog.Title className="text-lg font-semibold text-foreground">
-                            Delete this shift?
+                            {published.isPublished ? 'Cancel this shift?' : 'Delete this shift?'}
                         </AlertDialog.Title>
                         <AlertDialog.Description className="mt-2 text-sm text-muted-foreground">
                             {shiftToDelete
-                                ? `${shiftToDelete.employeeName ?? OPEN_ROW_LABEL} · ${formatShiftTimeRange(shiftToDelete)} on ${formatDayHeading(shiftToDelete.date)} will be removed from this roster. This cannot be undone.`
-                                : 'This shift will be removed from the roster.'}
+                                ? published.isPublished
+                                    ? `${shiftToDelete.employeeName ?? OPEN_ROW_LABEL} · ${formatShiftTimeRange(shiftToDelete)} on ${formatDayHeading(shiftToDelete.date)} will be moved to cancelled (red left border) and the employee will be notified. You can revert it later by reopening the shift and switching the status back.`
+                                    : `${shiftToDelete.employeeName ?? OPEN_ROW_LABEL} · ${formatShiftTimeRange(shiftToDelete)} on ${formatDayHeading(shiftToDelete.date)} will be removed from this roster. This cannot be undone.`
+                                : published.isPublished
+                                    ? 'This shift will be moved to cancelled and the employee will be notified.'
+                                    : 'This shift will be removed from the roster.'}
                         </AlertDialog.Description>
                         <div className="mt-6 flex justify-end gap-3">
                             <AlertDialog.Cancel asChild>
@@ -897,14 +941,20 @@ export function RosterDetailPage(): JSX.Element {
                                 }}
                                 className="inline-flex h-10 items-center justify-center rounded-lg bg-danger px-4 text-sm font-semibold text-danger-foreground transition-colors hover:bg-danger/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-60"
                             >
-                                {deleteShift.isPending ? 'Deleting…' : 'Delete shift'}
+                                {deleteShift.isPending
+                                    ? published.isPublished
+                                        ? 'Staging…'
+                                        : 'Deleting…'
+                                    : published.isPublished
+                                        ? 'Cancel shift & notify'
+                                        : 'Delete shift'}
                             </button>
                         </div>
                     </AlertDialog.Content>
                 </AlertDialog.Portal>
             </AlertDialog.Root>
 
-            {/* Employee removal confirmation (bin icon on an employee name cell) */}
+            {/* Employee removal confirmation (bin icon on an employee name cell) — published rosters cancel + notify. */}
             <AlertDialog.Root
                 open={employeeToDelete !== null}
                 onOpenChange={(next) => {
@@ -921,8 +971,12 @@ export function RosterDetailPage(): JSX.Element {
                         </AlertDialog.Title>
                         <AlertDialog.Description className="mt-2 text-sm text-muted-foreground">
                             {employeeToDelete
-                                ? `All ${employeeToDelete.shiftCount} ${employeeToDelete.shiftCount === 1 ? 'shift' : 'shifts'} assigned to ${employeeToDelete.name} for this week will be removed. This cannot be undone.`
-                                : 'All shifts assigned to this employee for the week will be removed.'}
+                                ? published.isPublished
+                                    ? `All ${employeeToDelete.shiftCount} ${employeeToDelete.shiftCount === 1 ? 'shift' : 'shifts'} assigned to ${employeeToDelete.name} for this week will be moved to cancelled and ${employeeToDelete.name} will be notified. Reopen any shift to revert it.`
+                                    : `All ${employeeToDelete.shiftCount} ${employeeToDelete.shiftCount === 1 ? 'shift' : 'shifts'} assigned to ${employeeToDelete.name} for this week will be removed. This cannot be undone.`
+                                : published.isPublished
+                                    ? 'All shifts assigned to this employee for the week will be moved to cancelled and the employee will be notified.'
+                                    : 'All shifts assigned to this employee for the week will be removed.'}
                         </AlertDialog.Description>
                         <div className="mt-6 flex justify-end gap-3">
                             <AlertDialog.Cancel asChild>

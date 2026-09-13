@@ -31,6 +31,8 @@ export const quickShiftSchema = z
         startTime: timeField('Start time'),
         /** Local end time, `HH:mm`; may be before the start for overnight shifts. */
         endTime: timeField('End time'),
+        /** Lifecycle status — enables reverting a cancelled shift from the roster grid. */
+        status: z.enum(['scheduled', 'completed', 'cancelled', 'swap_requested']),
         /** Unpaid/paid break length in minutes, held as a string by the input. */
         breakMinutes: z
             .string()

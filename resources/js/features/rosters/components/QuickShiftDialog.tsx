@@ -16,6 +16,7 @@ import { Switch } from '@/Components/ui/switch';
 import { cn } from '@/lib/utils';
 
 import { usePositionOptions } from '@/features/positions/hooks/usePositions';
+import { SHIFT_STATUS_LABELS } from '@/types/shift';
 
 import {
     formatHours,
@@ -61,12 +62,19 @@ interface QuickShiftDialogProps {
     onSubmit: (target: QuickShiftTarget, values: QuickShiftValues) => Promise<void>;
 }
 
-/** Shared field styling (mirrors the app's form controls). */
+/**
+ * Shared field styling (mirrors the app's form controls).
+ *
+ * Mobile compacts the controls (`h-9`, tighter padding) because this dialog is
+ * the edit surface for a single cell and is routinely opened on a phone, where a
+ * tall form pushes the save button off-screen.
+ */
 const fieldClasses = cn(
-    'h-11 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground',
+    'h-9 w-full rounded-lg border border-input bg-background px-2.5 text-sm text-foreground',
     'placeholder:text-muted-foreground transition-colors duration-200',
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-ring',
     'disabled:cursor-not-allowed disabled:opacity-60',
+    'sm:h-11 sm:px-3',
 );
 
 /** Maps template values onto the string-based form inputs. */
@@ -74,6 +82,7 @@ function toFormValues(values: ShiftTemplateValues): QuickShiftInput {
     return {
         startTime: values.startTime,
         endTime: values.endTime,
+        status: values.status,
         breakMinutes: String(values.breakMinutes),
         isPaidBreak: values.isPaidBreak,
         positionId: values.positionId ?? '',
@@ -150,19 +159,27 @@ export function QuickShiftDialog({
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent className="max-w-md">
+            <DialogContent className="max-w-md max-sm:gap-3 max-sm:p-4">
                 <DialogHeader>
-                    <DialogTitle>{isEdit ? 'Edit shift' : 'Add shift'}</DialogTitle>
+                    <DialogTitle>
+                        {isEdit
+                            ? target?.values.status === 'cancelled'
+                                ? 'Revert cancelled shift'
+                                : 'Edit shift'
+                            : 'Add shift'}
+                    </DialogTitle>
                     <DialogDescription>
                         {isEdit
-                            ? 'Adjust the times, break or role for this shift.'
+                            ? target?.values.status === 'cancelled'
+                                ? 'This shift was cancelled. Change the status back to scheduled (or another status) to revert it — affected staff will be notified on save.'
+                                : 'Adjust the times, break, role or status for this shift.'
                             : 'Set the times for the new shift in this cell.'}
                     </DialogDescription>
                 </DialogHeader>
 
                 {/* Fixed context: who and when. Changing either is a move, not an edit. */}
                 {target && (
-                    <div className="flex flex-col gap-1.5 rounded-lg bg-secondary/60 p-3 text-sm">
+                    <div className="flex flex-col gap-1.5 rounded-lg bg-secondary/60 p-2.5 text-sm sm:p-3">
                         <p className="flex items-center gap-2 font-medium text-foreground">
                             <UserRound className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                             {target.employeeLabel}
@@ -174,9 +191,9 @@ export function QuickShiftDialog({
                     </div>
                 )}
 
-                <form onSubmit={submit} noValidate className="space-y-4">
+                <form onSubmit={submit} noValidate className="space-y-4 max-sm:space-y-3">
                     {/* Times */}
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-3 max-sm:gap-2">
                         <div className="space-y-1.5">
                             <label
                                 htmlFor="quick-shift-start"
@@ -219,7 +236,7 @@ export function QuickShiftDialog({
                     </div>
 
                     {/* Break */}
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-3 max-sm:gap-2">
                         <div className="space-y-1.5">
                             <label
                                 htmlFor="quick-shift-break"
@@ -250,7 +267,7 @@ export function QuickShiftDialog({
                                 control={control}
                                 name="isPaidBreak"
                                 render={({ field }) => (
-                                    <div className="flex h-11 items-center gap-2">
+                                    <div className="flex h-9 items-center gap-2 sm:h-11">
                                         <Switch
                                             id="quick-shift-paid-break"
                                             checked={field.value}
@@ -269,7 +286,7 @@ export function QuickShiftDialog({
                     </div>
 
                     {/* Live payable-hours preview */}
-                    <p className="flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted-foreground">
+                    <p className="flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-1.5 text-xs text-muted-foreground sm:py-2 sm:text-sm">
                         <Clock className="h-4 w-4 shrink-0" aria-hidden="true" />
                         <span>
                             {previewRange} ·{' '}
@@ -281,7 +298,7 @@ export function QuickShiftDialog({
                     </p>
 
                     {/* Role + headcount */}
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-3 max-sm:gap-2">
                         <div className="space-y-1.5">
                             <label
                                 htmlFor="quick-shift-position"
@@ -333,6 +350,40 @@ export function QuickShiftDialog({
                                 <p className="text-sm text-danger">{errors.requiredStaff.message}</p>
                             )}
                         </div>
+                    </div>
+
+                    {/* Status — enables reverting a cancelled shift without leaving the roster grid */}
+                    <div className="space-y-1.5">
+                        <label
+                            htmlFor="quick-shift-status"
+                            className="block text-sm font-medium text-foreground"
+                        >
+                            Status
+                        </label>
+                        <select
+                            id="quick-shift-status"
+                            aria-invalid={Boolean(errors.status)}
+                            className={fieldClasses}
+                            {...register('status')}
+                        >
+                            {(
+                                Object.entries(SHIFT_STATUS_LABELS) as Array<
+                                    [QuickShiftValues['status'], string]
+                                >
+                            ).map(([status, label]) => (
+                                <option key={status} value={status}>
+                                    {label}
+                                </option>
+                            ))}
+                        </select>
+                        {errors.status && (
+                            <p className="text-sm text-danger">{errors.status.message}</p>
+                        )}
+                        {target?.values.status === 'cancelled' && (
+                            <p className="text-xs text-muted-foreground">
+                                Switching back to Scheduled reverts the cancellation.
+                            </p>
+                        )}
                     </div>
 
                     {/* Notes */}

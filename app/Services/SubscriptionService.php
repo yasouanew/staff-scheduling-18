@@ -430,9 +430,9 @@ class SubscriptionService
      *    is NOT applied locally; instead a hosted Checkout session for the
      *    prorated amount is returned so the admin can pay first.
      *  - **Downgrade** (target price < current price): the swap creates
-     *    prorations and the prorated difference is refunded in cash against
-     *    the current period's succeeded PaymentIntent (capped at what was
-     *    actually paid), recorded as a `type = refund` row.
+     *    prorations and the unused credit is carried to the next renewal.
+     *    NO cash refund is issued for the prorated difference — the plan
+     *    change is applied and `refund` in the result is always null.
      *  - The renewal date (`ends_at`) is preserved in every path — Stripe's
      *    `billing_cycle_anchor: unchanged` keeps the provider in agreement.
      *
@@ -503,8 +503,9 @@ class SubscriptionService
                 // `always_invoice` charges the difference immediately on
                 // upgrades when a card is on file; otherwise pending proration
                 // items (`create_prorations`) carry it to the next renewal.
-                // Downgrades keep Stripe's default proration (credit items)
-                // and the cash refund is issued below.
+                // Downgrades keep Stripe's default proration (credit items),
+                // which carries the unused credit to the next renewal — no
+                // cash refund is issued for the prorated difference.
                 $invoice = $this->billing->swap(
                     $subscription->user,
                     $subscription,
@@ -539,9 +540,10 @@ class SubscriptionService
                 $charge = $this->recordProrationCharge($subscription, $plan, $cycle, $invoice, $previousPlanName);
             }
 
-            if ($providerBacked && $direction === 'downgrade') {
-                $refund = $this->refundDowngradeDifference($subscription, $plan, $cycle, $previousPlanName);
-            }
+            // Downgrades never issue a cash refund: the plan change is applied
+            // and Stripe's proration credit carries the unused amount to the
+            // next renewal instead of returning money to the customer.
+            // ($refund stays null, so the response carries `refund => null`.)
 
             return $subscription->fresh();
         });
@@ -625,93 +627,6 @@ class SubscriptionService
             'currency' => $payment->currency,
             'reference' => $payment->provider_reference,
             'payment_intent' => $payment->stripe_payment_intent_id,
-        ];
-    }
-
-    /**
-     * Refund the prorated difference produced by a downgrade, in cash,
-     * against the current period's succeeded PaymentIntent.
-     *
-     * The refund is capped at what the business actually paid for the current
-     * period (minus anything already refunded) so a mispriced catalogue can
-     * never over-refund. The refund is recorded as a `type = refund` row so
-     * the Invoices tab shows the money returned for the plan change.
-     *
-     * @return array{amount: float, currency: string, refund_id: string|null}|null
-     */
-    protected function refundDowngradeDifference(
-        Subscription $subscription,
-        Plan $plan,
-        string $cycle,
-        ?string $previousPlanName,
-    ): ?array {
-        $currentPlan = $subscription->plan;
-
-        if (! $currentPlan) {
-            return null;
-        }
-
-        $difference = round($this->amountFor($currentPlan, $cycle) - $this->amountFor($plan, $cycle), 2);
-
-        if ($difference <= 0) {
-            return null;
-        }
-
-        // The most recent succeeded payment of this subscription is the
-        // charge the prorated difference came from.
-        $payment = $subscription->payments()
-            ->succeeded()
-            ->where('type', '!=', 'refund')
-            ->whereNotNull('stripe_payment_intent_id')
-            ->orderByDesc('paid_at')
-            ->orderByDesc('id')
-            ->first();
-
-        if (! $payment) {
-            return null;
-        }
-
-        // Never refund more than the business actually paid for the period.
-        $refundable = round((float) $payment->amount - (float) $payment->amount_refunded, 2);
-        $refundAmount = min($difference, $refundable);
-
-        if ($refundAmount <= 0) {
-            return null;
-        }
-
-        $user = $subscription->user;
-
-        if (! $user) {
-            return null;
-        }
-
-        $result = $this->billing->refund($user, (string) $payment->stripe_payment_intent_id, $refundAmount);
-
-        $totalRefunded = (float) $payment->amount_refunded + $refundAmount;
-
-        $payment->update([
-            'amount_refunded' => $totalRefunded,
-            'status' => $totalRefunded >= (float) $payment->amount ? 'refunded' : $payment->status,
-            'refunded_at' => now(),
-        ]);
-
-        $refundRow = $subscription->payments()->create([
-            'amount' => $refundAmount,
-            'currency' => $payment->currency,
-            'payment_provider' => 'stripe',
-            'provider_reference' => $result['refund_id'] ?? null,
-            'stripe_payment_intent_id' => $payment->stripe_payment_intent_id,
-            'status' => 'refunded',
-            'type' => 'refund',
-            'description' => 'Plan change refund: '.($previousPlanName ?? 'previous plan').' → '.$plan->name,
-            'amount_refunded' => $refundAmount,
-            'refunded_at' => now(),
-        ]);
-
-        return [
-            'amount' => (float) $refundRow->amount,
-            'currency' => $refundRow->currency,
-            'refund_id' => $result['refund_id'] ?? null,
         ];
     }
 
@@ -1059,8 +974,9 @@ class SubscriptionService
      *
      * - Upgrades (newPrice > oldPrice) yield a positive amount the admin pays
      *   now to "top up" to the new plan.
-     * - Downgrades (newPrice < oldPrice) yield a negative amount — the provider
-     *   credits the difference back, so the UI shows a credit rather than a
+     * - Downgrades (newPrice < oldPrice) yield a negative amount; the provider
+     *   credits the difference forward to the next renewal (no cash refund),
+     *   so the UI shows a credit rather than a
      *   charge.
      * - Same price / no period window yields zero (nothing due).
      *

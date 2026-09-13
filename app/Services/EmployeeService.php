@@ -2,7 +2,9 @@
 
 namespace App\Services;
 
+use App\Exceptions\BranchCapacityException;
 use App\Exceptions\InvitationPendingException;
+use App\Models\Branch;
 use App\Models\Employee;
 use App\Models\User;
 use App\Notifications\EmployeeInvitationNotification;
@@ -427,6 +429,68 @@ class EmployeeService
     }
 
     /**
+     * Transfer an employee from their current branch to a destination branch.
+     *
+     * The destination capacity is validated BEFORE the assignment changes, and
+     * the whole operation (validation + re-assignment + audit) runs inside a
+     * single database transaction so a rejected transfer never leaves a
+     * partially-updated record.
+     *
+     * The employee's company is used as the authoritative business scope, so a
+     * destination branch from another company is always rejected.
+     *
+     * @throws BranchCapacityException when the destination belongs to another
+     *         business, the business has no entitled subscription, or the
+     *         destination has no employee capacity remaining.
+     */
+    public function transferEmployee(
+        Employee $employee,
+        Branch $destination,
+        ?User $actor = null,
+    ): Employee {
+        return DB::transaction(function () use ($employee, $destination, $actor) {
+            $company = $employee->company;
+
+            if ($company === null || (int) $destination->company_id !== (int) $company->id) {
+                throw new BranchCapacityException(
+                    'This branch does not belong to the authenticated business.',
+                    'CROSS_BUSINESS_ACCESS_DENIED',
+                    [
+                        'company_id' => $company?->id,
+                        'branch_id' => $destination->id,
+                    ],
+                    403,
+                );
+            }
+
+            $source = $employee->branch;
+
+            if ($source && $source->id === $destination->id) {
+                return $employee->refresh()->load(['company', 'branch']);
+            }
+
+            // Validate the destination BEFORE mutating anything.
+            $this->assertCapacityForAssignment($company->id, $destination->id);
+
+            $employee->update(['branch_id' => $destination->id]);
+
+            activity('employee')
+                ->performedOn($employee)
+                ->causedBy($actor)
+                ->withProperties([
+                    'event' => 'EMPLOYEE_TRANSFERRED',
+                    'from_branch_id' => $source?->id,
+                    'to_branch_id' => $destination->id,
+                    'company_id' => $company->id,
+                ])
+                ->event('employee_transferred')
+                ->log('Employee transferred to another branch.');
+
+            return $employee->refresh()->load(['company', 'branch']);
+        });
+    }
+
+    /**
      * Enforce branch employee capacity when assigning an employee to a branch.
      *
      * Capacity rules only apply once an employee is actually assigned to a
@@ -436,8 +500,8 @@ class EmployeeService
      * for non-super-admins) and the branch is re-scoped server-side by the
      * BranchSubscriptionService before any capacity check runs.
      *
-     * @throws \App\Exceptions\BranchCapacityException when the branch is full,
-     *         not entitled, or belongs to another business.
+     * @throws BranchCapacityException when the branch is full or belongs to
+     *         another business.
      */
     protected function assertCapacityForAssignment(mixed $companyId, mixed $branchId): void
     {

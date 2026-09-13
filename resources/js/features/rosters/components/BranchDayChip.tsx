@@ -171,7 +171,7 @@ export function BranchDayChip({
                 className={cn(
                     'absolute right-0.5 top-0.5 flex items-center gap-0.5 rounded bg-card/95 p-0.5 shadow-sm',
                     !actionsAlwaysVisible &&
-                    'opacity-0 transition-opacity group-hover/branch:opacity-100 group-focus-within/branch:opacity-100',
+                    'opacity-0 transition-opacity group-hover/branch:opacity-100 group-focus-within/branch:opacity-100 max-md:opacity-100',
                 )}
             >
 

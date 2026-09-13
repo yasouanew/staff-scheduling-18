@@ -114,6 +114,17 @@ interface AddShiftWizardProps {
      * absent key means no roster exists yet, so a fresh draft week will be opened.
      */
     branchWeekStatuses: ReadonlyMap<string, RosterStatus>;
+    /**
+     * Branch ids that already have at least one shift on `date`.
+     *
+     * Derived from the calendar cell (`CalendarDay.coveredBranchIds`) so step 1
+     * can disable branches that are already rostered that day. Editing the
+     * existing branch-day (via `BranchDayEditorDialog`) is the correction path —
+     * creating a second branch-day would split the day across two roster reads.
+     */
+    coveredBranchIds?: readonly string[];
+    /** Shift count per covered branch, shown as context on disabled rows. */
+    coveredShiftCounts?: Readonly<Record<string, number>>;
     onSubmit: (submission: AddShiftSubmission) => Promise<void>;
     isSubmitting: boolean;
 }
@@ -187,11 +198,15 @@ function EmployeeListItem({
 
             {/*
              * Times + break inputs. Always rendered so every row lines up, but
-             * they only activate once the person is selected. The row splits
-             * into three equal visual zones (time range / break minutes / break
-             * status) so both columns share identical alignment.
+             * they only activate once the person is selected.
+             *
+             * Each zone gets a labelled block with a minimum height so the row
+             * content can never collide when the dialog is narrow: on mobile the
+             * three zones stack (each full width) instead of being squeezed into
+             * three unreadable columns, while `sm+` keeps the original
+             * side-by-side alignment shared by both columns.
              */}
-            <div className="mt-2 grid grid-cols-3 items-center gap-2 pl-7">
+            <div className="mt-2 grid grid-cols-1 items-end gap-2 pl-7 sm:grid-cols-3">
                 <div className="flex min-w-0 items-center gap-1">
                     <input
                         type="time"
@@ -199,7 +214,7 @@ function EmployeeListItem({
                         disabled={!isSelected}
                         onChange={(event) => onUpdateTime(employee.id, 'startTime', event.target.value)}
                         aria-label={`Start time for ${employee.name}`}
-                        className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-1 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+                        className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
                     />
                     <span className="shrink-0 text-xs text-muted-foreground" aria-hidden="true">
                         –
@@ -210,12 +225,14 @@ function EmployeeListItem({
                         disabled={!isSelected}
                         onChange={(event) => onUpdateTime(employee.id, 'endTime', event.target.value)}
                         aria-label={`End time for ${employee.name}`}
-                        className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-1 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+                        className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
                     />
                 </div>
 
-                <label className="flex items-center justify-center gap-1">
-                    <span className="text-[11px] font-medium text-muted-foreground">Break</span>
+                <label className="flex items-center gap-1.5 sm:justify-center">
+                    <span className="shrink-0 text-[11px] font-medium text-muted-foreground">
+                        Break
+                    </span>
                     <input
                         type="number"
                         min={0}
@@ -224,9 +241,9 @@ function EmployeeListItem({
                         disabled={!isSelected}
                         onChange={(event) => onUpdateBreakMinutes(employee.id, event.target.value)}
                         aria-label={`Break minutes for ${employee.name}`}
-                        className="h-8 w-16 rounded-md border border-input bg-background px-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+                        className="h-9 w-full min-w-0 flex-1 rounded-md border border-input bg-background px-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 sm:w-16 sm:flex-none"
                     />
-                    <span className="text-[11px] text-muted-foreground">min</span>
+                    <span className="shrink-0 text-[11px] text-muted-foreground">min</span>
                 </label>
 
                 <select
@@ -234,7 +251,7 @@ function EmployeeListItem({
                     disabled={!isSelected}
                     onChange={(event) => onUpdateBreakStatus(employee.id, event.target.value === 'paid')}
                     aria-label={`Break status for ${employee.name}`}
-                    className="h-8 w-full rounded-md border border-input bg-background px-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+                    className="h-9 w-full rounded-md border border-input bg-background px-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
                 >
                     <option value="paid">Paid</option>
                     <option value="unpaid">Unpaid</option>
@@ -287,7 +304,7 @@ function EmployeeColumn({
     const isSearching = searchValue.trim().length > 0;
 
     return (
-        <section className="flex min-h-0 flex-col gap-2.5 lg:flex-1">
+        <section className="flex flex-col gap-2.5 lg:min-h-0 lg:flex-1">
             <div className="flex items-center justify-between gap-2 rounded-lg bg-secondary/60 px-2.5 py-1.5">
                 <h3 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-foreground">
                     <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
@@ -320,12 +337,7 @@ function EmployeeColumn({
                 />
             </div>
 
-            {/*
-             * Aligned column labels for the input row each employee renders, so
-             * the time range, break minutes and break status stay readable and
-             * line up identically in both columns.
-             */}
-            <div className="grid grid-cols-3 items-center gap-2 pl-7 pr-1">
+            <div className="hidden grid-cols-3 items-center gap-2 pl-7 pr-1 sm:grid">
                 <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                     Time
                 </span>
@@ -337,7 +349,13 @@ function EmployeeColumn({
                 </span>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {/*
+             * On mobile the list scrolls inside a fixed 15rem window so the two
+             * stacked columns can never overflow into each other vertically; from
+             * `lg` up the column is height-constrained by the dialog and the list
+             * fills the remaining space instead.
+             */}
+            <div className="max-h-96 overflow-y-auto pr-1 lg:max-h-none lg:min-h-0 lg:flex-1">
                 {isLoading ? (
                     <div className="space-y-2" aria-busy="true">
                         {[0, 1, 2, 3].map((key) => (
@@ -394,6 +412,8 @@ export function AddShiftWizard({
     date,
     presetBranchId,
     branchWeekStatuses,
+    coveredBranchIds = [],
+    coveredShiftCounts = {},
     onSubmit,
     isSubmitting,
 }: AddShiftWizardProps): JSX.Element | null {
@@ -489,11 +509,18 @@ export function AddShiftWizard({
         setVisibility('draft');
     }, [open, presetBranchId]);
 
+    const coveredBranchSet = useMemo(() => new Set(coveredBranchIds), [coveredBranchIds]);
+
     const branches = useMemo(() => {
         const all = branchesQuery.data ?? [];
         const term = branchSearch.trim().toLowerCase();
         return term ? all.filter((branch) => branch.name.toLowerCase().includes(term)) : all;
     }, [branchesQuery.data, branchSearch]);
+
+    const availableBranchCount = useMemo(
+        () => branches.filter((branch) => !coveredBranchSet.has(branch.id)).length,
+        [branches, coveredBranchSet],
+    );
 
     const allEmployees = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data]);
 
@@ -612,8 +639,11 @@ export function AddShiftWizard({
         });
     };
 
+    const selectedBranchIsCovered = branchId !== null && coveredBranchSet.has(branchId);
+
     const handleSubmit = async (): Promise<void> => {
         if (!branchId || !date || assignments.size === 0) return;
+        if (coveredBranchSet.has(branchId)) return;
 
         // Each employee's own branch decides their break defaults, so an
         // untouched field resolves against that employee's policy — not the
@@ -661,7 +691,7 @@ export function AddShiftWizard({
                 <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
                 <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[92vh] w-[calc(100%-2rem)] max-w-5xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-card shadow-xl focus:outline-none">
                     {/* Header */}
-                    <div className="flex items-start justify-between gap-4 border-b border-border p-5">
+                    <div className="flex shrink-0 items-start justify-between gap-4 border-b border-border p-5">
                         <div className="min-w-0">
                             <Dialog.Title className="text-lg font-semibold text-foreground">
                                 Add shifts
@@ -683,7 +713,7 @@ export function AddShiftWizard({
                     </div>
 
                     {/* Step indicator */}
-                    <ol className="flex items-center gap-2 border-b border-border px-5 py-3">
+                    <ol className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-3">
                         {STEPS.map((item) => (
                             <li key={item.index} className="flex items-center gap-2">
                                 <span
@@ -767,77 +797,124 @@ export function AddShiftWizard({
                                     <p className="py-8 text-center text-sm text-muted-foreground">
                                         No branches match your search.
                                     </p>
+                                ) : availableBranchCount === 0 ? (
+                                    <p className="rounded-lg border border-border bg-muted/50 p-4 text-center text-sm text-muted-foreground">
+                                        Every branch already has shifts on this day. Edit the
+                                        existing branch day instead of adding a duplicate.
+                                    </p>
                                 ) : (
                                     <ul className="space-y-1.5">
-                                        {branches.map((branch) => (
-                                            <li key={branch.id}>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => {
-                                                        setBranchId(branch.id);
-                                                        setStep(2);
-                                                    }}
-                                                    className={cn(
-                                                        'flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                                                        branchId === branch.id
-                                                            ? 'border-primary bg-primary/5'
-                                                            : 'border-border hover:bg-secondary',
-                                                    )}
-                                                >
-                                                    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                                                        <Building2
-                                                            className="h-4 w-4"
-                                                            aria-hidden="true"
-                                                        />
-                                                    </span>
-                                                    <span className="truncate text-sm font-medium text-foreground">
-                                                        {branch.name}
-                                                    </span>
-                                                </button>
-                                            </li>
-                                        ))}
+                                        {branches.map((branch) => {
+                                            const isCovered = coveredBranchSet.has(branch.id);
+                                            const coveredCount =
+                                                coveredShiftCounts[branch.id] ?? 0;
+                                            return (
+                                                <li key={branch.id}>
+                                                    <button
+                                                        type="button"
+                                                        disabled={isCovered}
+                                                        onClick={() => {
+                                                            if (isCovered) return;
+                                                            setBranchId(branch.id);
+                                                            setStep(2);
+                                                        }}
+                                                        title={
+                                                            isCovered
+                                                                ? `${branch.name} already has ${coveredCount} shift${coveredCount === 1 ? '' : 's'} on this day — edit that branch day instead`
+                                                                : `Add shifts for ${branch.name}`
+                                                        }
+                                                        aria-disabled={isCovered}
+                                                        className={cn(
+                                                            'flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                                                            isCovered
+                                                                ? 'cursor-not-allowed border-border bg-muted/50 opacity-60'
+                                                                : branchId === branch.id
+                                                                    ? 'border-primary bg-primary/5'
+                                                                    : 'border-border hover:bg-secondary',
+                                                        )}
+                                                    >
+                                                        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                                                            <Building2
+                                                                className="h-4 w-4"
+                                                                aria-hidden="true"
+                                                            />
+                                                        </span>
+                                                        <span className="min-w-0 flex-1">
+                                                            <span className="block truncate text-sm font-medium text-foreground">
+                                                                {branch.name}
+                                                            </span>
+                                                            {isCovered ? (
+                                                                <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                                                                    <Check
+                                                                        className="h-3 w-3 text-success"
+                                                                        aria-hidden="true"
+                                                                    />
+                                                                    Already rostered
+                                                                    {coveredCount > 0
+                                                                        ? ` · ${coveredCount} shift${coveredCount === 1 ? '' : 's'}`
+                                                                        : ''}
+                                                                </span>
+                                                            ) : null}
+                                                        </span>
+                                                        {isCovered ? (
+                                                            <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                                                                Added
+                                                            </span>
+                                                        ) : null}
+                                                    </button>
+                                                </li>
+                                            );
+                                        })}
                                     </ul>
                                 )}
                             </div>
                         ) : step === 2 ? (
-                            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto lg:grid lg:grid-cols-2 lg:grid-rows-[minmax(0,1fr)] lg:gap-0 lg:overflow-hidden">
-                                <div className="flex min-h-0 flex-col lg:pr-5">
-                                    <EmployeeColumn
-                                        title={`${selectedBranchName ?? 'This branch'} employees`}
-                                        searchInputId="branch-employee-search"
-                                        searchPlaceholder="Search this branch..."
-                                        searchValue={branchEmployeeSearch}
-                                        onSearchChange={setBranchEmployeeSearch}
-                                        employees={branchEmployees}
-                                        assignments={assignments}
-                                        isLoading={employeesQuery.isLoading}
-                                        emptyMessage="No active employees are assigned to this branch."
-                                        noResultsMessage="No employees in this branch match your search."
-                                        onToggle={toggleEmployee}
-                                        onUpdateTime={updateTime}
-                                        onUpdateBreakMinutes={updateBreakMinutes}
-                                        onUpdateBreakStatus={updateBreakStatus}
-                                        resolveBreakDefaults={resolveBreakDefaults}
-                                    />
-                                </div>
-                                <div className="flex min-h-0 flex-col lg:border-l lg:border-border lg:pl-5">
-                                    <EmployeeColumn
-                                        title="Other employees"
-                                        searchInputId="other-employee-search"
-                                        searchPlaceholder="Search other employees..."
-                                        searchValue={otherEmployeeSearch}
-                                        onSearchChange={setOtherEmployeeSearch}
-                                        employees={otherEmployees}
-                                        assignments={assignments}
-                                        isLoading={employeesQuery.isLoading}
-                                        emptyMessage="No other active employees are available."
-                                        noResultsMessage="No other employees match your search."
-                                        onToggle={toggleEmployee}
-                                        onUpdateTime={updateTime}
-                                        onUpdateBreakMinutes={updateBreakMinutes}
-                                        onUpdateBreakStatus={updateBreakStatus}
-                                        resolveBreakDefaults={resolveBreakDefaults}
-                                    />
+                            <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+                                {selectedBranchIsCovered ? (
+                                    <p className="flex shrink-0 items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-xs text-foreground">
+                                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />
+                                        This branch already has shifts on this day. Edit that branch day instead of adding a duplicate.
+                                    </p>
+                                ) : null}
+                                <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row lg:gap-0 lg:overflow-hidden">
+                                    <div className="flex flex-col max-lg:border-b max-lg:border-border max-lg:pb-4 lg:min-h-0 lg:min-w-0 lg:flex-1 lg:pr-5">
+                                        <EmployeeColumn
+                                            title={`${selectedBranchName ?? 'This branch'} employees`}
+                                            searchInputId="branch-employee-search"
+                                            searchPlaceholder="Search this branch..."
+                                            searchValue={branchEmployeeSearch}
+                                            onSearchChange={setBranchEmployeeSearch}
+                                            employees={branchEmployees}
+                                            assignments={assignments}
+                                            isLoading={employeesQuery.isLoading}
+                                            emptyMessage="No active employees are assigned to this branch."
+                                            noResultsMessage="No employees in this branch match your search."
+                                            onToggle={toggleEmployee}
+                                            onUpdateTime={updateTime}
+                                            onUpdateBreakMinutes={updateBreakMinutes}
+                                            onUpdateBreakStatus={updateBreakStatus}
+                                            resolveBreakDefaults={resolveBreakDefaults}
+                                        />
+                                    </div>
+                                    <div className="flex flex-col max-lg:pt-4 lg:min-h-0 lg:min-w-0 lg:flex-1 lg:border-l lg:border-border lg:pl-5">
+                                        <EmployeeColumn
+                                            title="Other employees"
+                                            searchInputId="other-employee-search"
+                                            searchPlaceholder="Search other employees..."
+                                            searchValue={otherEmployeeSearch}
+                                            onSearchChange={setOtherEmployeeSearch}
+                                            employees={otherEmployees}
+                                            assignments={assignments}
+                                            isLoading={employeesQuery.isLoading}
+                                            emptyMessage="No other active employees are available."
+                                            noResultsMessage="No other employees match your search."
+                                            onToggle={toggleEmployee}
+                                            onUpdateTime={updateTime}
+                                            onUpdateBreakMinutes={updateBreakMinutes}
+                                            onUpdateBreakStatus={updateBreakStatus}
+                                            resolveBreakDefaults={resolveBreakDefaults}
+                                        />
+                                    </div>
                                 </div>
                             </div>
                         ) : (
@@ -991,7 +1068,7 @@ export function AddShiftWizard({
                     </div>
 
                     {/* Footer */}
-                    <div className="flex items-center justify-between gap-3 border-t border-border p-5">
+                    <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border p-5">
                         <p className="text-sm text-muted-foreground">
                             {step >= 2 && assignmentCount > 0 ? `${assignmentCount} selected` : ''}
                         </p>

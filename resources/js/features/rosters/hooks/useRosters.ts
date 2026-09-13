@@ -191,6 +191,11 @@ function normalizeHexColor(raw: string | null | undefined): string | null {
 
 /** Convert a raw {@link ShiftDto} into the stable domain shape. */
 function mapShift(dto: ShiftDto): RosterShift {
+    const persisted = normalizeShiftStatus(dto.status);
+    // Cancelled stays cancelled even when unassigned so the red accent +
+    // revert affordance survive; otherwise unassigned reads as `open`.
+    const status: RosterShift['status'] =
+        persisted === 'cancelled' ? 'cancelled' : dto.employee_id === null ? 'open' : persisted;
     return {
         id: String(dto.id),
         rosterId: dto.roster_id === null ? null : String(dto.roster_id),
@@ -210,7 +215,7 @@ function mapShift(dto: ShiftDto): RosterShift {
         breakMinutes: parseMinutes(dto.break_minutes),
         isPaidBreak: Boolean(dto.paid_break),
         requiredStaff: Math.max(1, parseMinutes(dto.required_staff ?? 1) || 1),
-        status: dto.employee_id === null ? 'open' : normalizeShiftStatus(dto.status),
+        status,
         notes: dto.notes,
         flags: {
             overtimeRisk: Boolean(dto.overtime_risk),
@@ -332,9 +337,33 @@ async function updateRoster(id: string, values: RosterFormValues): Promise<Roste
     return mapRoster(response.data.data);
 }
 
-/** DELETE /rosters/{id} — permanently remove a roster and its shifts. */
-async function deleteRoster(id: string): Promise<void> {
-    await apiClient.delete<ApiSuccessResponse<null>>(`/rosters/${id}`);
+/** Result of DELETE /rosters/{id}: draft => hard delete, published => cancel-all. */
+export interface DeleteRosterResult {
+    /** Fresh roster when the backend cancelled shifts instead of deleting; `null` for draft deletes. */
+    roster: Roster | null;
+    /** Number of shifts moved to cancelled (published flow only). */
+    changeCount: number;
+}
+
+/** Minimal shape of the cancel-all summary returned for published rosters. */
+interface CancelAllSummaryDto {
+    change_count?: number | null;
+}
+
+/** DELETE /rosters/{id} — draft rosters are hard-deleted, published rosters cancel shifts + notify. */
+async function deleteRoster(id: string): Promise<DeleteRosterResult> {
+    const response = await apiClient.delete<
+        ApiSuccessResponse<{ roster: RosterDto; summary: CancelAllSummaryDto } | null>
+    >(`/rosters/${id}`);
+    const data = response.data.data;
+    if (data === null || data === undefined || !('roster' in data)) {
+        return { roster: null, changeCount: 0 };
+    }
+    return {
+        roster: mapRoster(data.roster),
+        changeCount:
+            typeof data.summary?.change_count === 'number' ? data.summary.change_count : 0,
+    };
 }
 
 /** POST /rosters/{id}/publish — make the roster visible to employees. */
@@ -411,14 +440,19 @@ export function useUpdateRoster(): UseMutationResult<
     });
 }
 
-/** Deletes a roster week and refreshes the list caches. */
-export function useDeleteRoster(): UseMutationResult<void, Error, string> {
+/** Deletes a roster week (draft) or cancels its shifts (published) and refreshes caches. */
+export function useDeleteRoster(): UseMutationResult<DeleteRosterResult, Error, string> {
     const queryClient = useQueryClient();
 
-    return useMutation<void, Error, string>({
+    return useMutation<DeleteRosterResult, Error, string>({
         mutationFn: deleteRoster,
-        onSuccess: (_data, id) => {
-            queryClient.removeQueries({ queryKey: ROSTERS_KEYS.detail(id) });
+        onSuccess: (result, id) => {
+            if (result.roster) {
+                // Published flow: the roster still exists with cancelled shifts.
+                queryClient.setQueryData(ROSTERS_KEYS.detail(id), result.roster);
+            } else {
+                queryClient.removeQueries({ queryKey: ROSTERS_KEYS.detail(id) });
+            }
             void queryClient.invalidateQueries({ queryKey: ROSTERS_KEYS.all });
         },
     });

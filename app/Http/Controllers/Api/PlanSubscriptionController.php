@@ -156,7 +156,12 @@ class PlanSubscriptionController extends Controller
             ->map(fn ($branch) => [
                 'id' => $branch->id,
                 'name' => $branch->name,
-                'active' => $this->entitlements->branchIsEntitled($branch),
+                // A branch is "active" once a branch subscription currently
+                // grants access (trial or active period still open). Resolved
+                // through the model's own canonical accessor rather than the
+                // entitlement service, which only exposes company-scoped
+                // feature/plan resolution.
+                'active' => $branch->activeBranchSubscription() !== null,
                 'employees_used' => (int) $branch->employees_used,
                 'employee_capacity' => $this->entitlements->branchEmployeeCapacity($branch),
                 'remaining' => $this->usage->remainingEmployeeCapacity($branch),
@@ -312,17 +317,16 @@ class PlanSubscriptionController extends Controller
             $request->user(),
         );
 
-        $refund = $result['refund'];
+        // Downgrades no longer issue a refund for the prorated difference.
+        // $refund = $result['refund'];
 
         return $this->successResponse([
             'subscription' => new SubscriptionSummaryResource($result['subscription']),
             'plan_changed' => true,
             'charge' => $result['charge'],
-            'refund' => $refund,
+            'refund' => null,
             'checkout_url' => $result['checkout_url'],
-        ], $refund
-            ? 'Subscription downgraded successfully. '.number_format($refund['amount'], 2).' '.$refund['currency'].' refunded for the rest of the current period.'
-            : 'Subscription downgraded successfully.');
+        ], 'Subscription downgraded successfully.');
     }
 
     /**

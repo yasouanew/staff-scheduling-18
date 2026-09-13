@@ -159,6 +159,48 @@ class RosterManagementTest extends TestCase
         $this->assertDatabaseMissing('rosters', ['id' => $roster->id]);
     }
 
+    public function test_deleting_a_published_roster_cancels_shifts_instead_of_deleting(): void
+    {
+        $this->actingAsSuperAdmin();
+        $roster = Roster::factory()->create(['status' => 'published', 'published_at' => now()]);
+        $shift = Shift::factory()->create([
+            'roster_id' => $roster->id,
+            'company_id' => $roster->company_id,
+            'branch_id' => $roster->branch_id,
+            'status' => 'scheduled',
+        ]);
+
+        $response = $this->deleteJson("/api/v1/rosters/{$roster->id}")->assertOk();
+
+        // The roster itself is kept; the shift is soft-cancelled (visible, red accent, revertable).
+        $this->assertDatabaseHas('rosters', ['id' => $roster->id, 'status' => 'published']);
+        $this->assertDatabaseHas('shifts', ['id' => $shift->id, 'status' => 'cancelled']);
+        $response->assertJsonPath('data.summary.change_count', 1);
+        $this->assertDatabaseHas('roster_changes', [
+            'roster_id' => $roster->id,
+            'shift_id' => $shift->id,
+            'action' => 'shift_cancelled',
+        ]);
+    }
+
+    public function test_deleting_an_already_cancelled_published_roster_is_a_noop(): void
+    {
+        $this->actingAsSuperAdmin();
+        $roster = Roster::factory()->create(['status' => 'published', 'published_at' => now()]);
+        Shift::factory()->create([
+            'roster_id' => $roster->id,
+            'company_id' => $roster->company_id,
+            'branch_id' => $roster->branch_id,
+            'status' => 'cancelled',
+        ]);
+
+        $this->deleteJson("/api/v1/rosters/{$roster->id}")
+            ->assertOk()
+            ->assertJsonPath('data.summary.change_count', 0);
+
+        $this->assertDatabaseHas('rosters', ['id' => $roster->id]);
+    }
+
     public function test_can_publish_a_roster(): void
     {
         $admin = $this->actingAsSuperAdmin();

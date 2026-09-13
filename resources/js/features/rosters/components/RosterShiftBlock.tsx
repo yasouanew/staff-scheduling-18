@@ -30,15 +30,15 @@ interface RosterShiftBlockProps {
 }
 
 /**
- * Semantic surface treatment per shift status. Cancelled shifts fade back,
- * open shifts read as a dashed vacancy, everything else is a solid card.
+ * Semantic surface treatment per shift status. Cancelled shifts fade back with
+ * a red accent, open shifts read as a dashed vacancy, everything else is solid.
  */
 const STATUS_SURFACES: Record<RosterShift['status'], string> = {
     open: 'border-dashed border-warning/60 bg-warning/5 hover:bg-warning/10',
     scheduled: 'border-border bg-card hover:bg-accent',
     confirmed: 'border-success/40 bg-success/5 hover:bg-success/10',
     completed: 'border-border bg-muted hover:bg-muted',
-    cancelled: 'border-border bg-muted/60 opacity-60 hover:opacity-80',
+    cancelled: 'border-danger/40 bg-muted/60 opacity-80 hover:opacity-100',
 };
 
 /** Shared styling for the inline edit/delete icon buttons. */
@@ -74,12 +74,16 @@ export function RosterShiftBlock({
     className,
 }: RosterShiftBlockProps): JSX.Element {
     const isOpen = shift.status === 'open';
+    const isCancelled = shift.status === 'cancelled';
     const conflicts = describeConflicts(shift);
     const conflicted = hasConflict(shift);
     const label = isOpen ? 'Open shift' : (shift.employeeName ?? 'Unassigned');
     const timeRange = formatShiftTimeRange(shift);
     const payable = formatHours(shiftPayableMinutes(shift));
-    const hasActions = Boolean(onEdit || onDelete);
+    // Cancelled shifts stay visible with a red accent and offer revert via edit;
+    // the bin action is hidden because re-cancelling is a no-op.
+    const effectiveOnDelete = isCancelled ? undefined : onDelete;
+    const hasActions = Boolean(onEdit || effectiveOnDelete);
 
     const accessibleLabel = [
         label,
@@ -91,6 +95,10 @@ export function RosterShiftBlock({
         .filter(Boolean)
         .join('. ');
 
+    // Cancelled shifts always show the danger-red left border so the state is
+    // obvious at a glance, even when the position has its own colour. The
+    // inline style is required because position colours are API data (hex),
+    // not Tailwind tokens.
     const block = (
         <button
             type="button"
@@ -102,12 +110,19 @@ export function RosterShiftBlock({
                 dense ? 'py-1.5' : 'py-1',
                 STATUS_SURFACES[shift.status],
                 // Fallback accent when the position has no colour configured.
-                shift.positionColor === null && !isOpen && 'border-l-primary',
+                shift.positionColor === null && !isOpen && !isCancelled && 'border-l-primary',
+                isCancelled && 'border-l-danger',
                 conflicted && 'ring-1 ring-inset ring-warning/50',
                 // Reserve room on the right so the time never sits under the icons.
                 hasActions && 'pr-12',
             )}
-            style={shift.positionColor ? { borderLeftColor: shift.positionColor } : undefined}
+            style={
+                isCancelled
+                    ? undefined
+                    : shift.positionColor
+                        ? { borderLeftColor: shift.positionColor }
+                        : undefined
+            }
         >
             <span className="flex items-center gap-1 truncate text-xs font-semibold leading-tight text-foreground">
                 {conflicted && (
@@ -181,18 +196,22 @@ export function RosterShiftBlock({
                         type="button"
                         onClick={() => onEdit(shift)}
                         disabled={actionsDisabled}
-                        title={`Edit shift ${timeRange}`}
-                        aria-label={`Edit shift ${timeRange} for ${label}`}
+                        title={isCancelled ? `Revert cancelled shift ${timeRange}` : `Edit shift ${timeRange}`}
+                        aria-label={
+                            isCancelled
+                                ? `Revert cancelled shift ${timeRange} for ${label}`
+                                : `Edit shift ${timeRange} for ${label}`
+                        }
                         className={cn(shiftActionButton, 'hover:bg-secondary hover:text-foreground')}
                     >
                         <Pencil className="h-3 w-3" aria-hidden="true" />
                     </button>
                 )}
 
-                {onDelete && (
+                {effectiveOnDelete && (
                     <button
                         type="button"
-                        onClick={() => onDelete(shift)}
+                        onClick={() => effectiveOnDelete(shift)}
                         disabled={actionsDisabled}
                         title={`Delete shift ${timeRange}`}
                         aria-label={`Delete shift ${timeRange} for ${label}`}

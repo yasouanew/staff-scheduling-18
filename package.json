@@ -4,7 +4,9 @@
     "type": "module",
     "scripts": {
         "build": "tsc && vite build",
-        "dev": "vite"
+        "dev": "vite",
+        "dev:host": "vite --host 0.0.0.0",
+        "serve:host": "php artisan serve --host=0.0.0.0 --port=8000"
     },
     "devDependencies": {
         "@headlessui/react": "^2.0.0",

@@ -271,6 +271,24 @@ export function getApiErrorMessage(
 }
 
 /**
+ * Extract the first server-side validation message for a single field.
+ *
+ * Laravel validation failures arrive as `{ errors: { field: [message] } }`.
+ * `getApiErrorMessage` collapses that payload to one string for a toast, which
+ * loses *which* field was rejected; this helper keeps the field association so a
+ * form can render the message inline beside the offending input.
+ */
+export function getApiFieldError(error: unknown, field: string): string | undefined {
+    if (!axios.isAxiosError<ApiErrorResponse>(error)) {
+        return undefined;
+    }
+
+    const fieldErrors = error.response?.data?.errors?.[field];
+
+    return Array.isArray(fieldErrors) && fieldErrors.length > 0 ? fieldErrors[0] : undefined;
+}
+
+/**
  * Whether a thrown error represents an optimistic-lock conflict (HTTP 409).
  *
  * The roster change endpoints reject a stale `version` with 409, which signals

@@ -135,8 +135,17 @@ export function usePublishedRosterMutations({
                 return;
             }
 
+            // An edit supersedes any pending cancel for the same shift — this is
+            // the revert path (cancelled → scheduled) when the manager reopens a
+            // cancelled block and changes the Status select back.
             setMutations((current) => [
-                ...current.filter((m) => !(m.type === 'update' && m.id === shiftId)),
+                ...current.filter(
+                    (m) =>
+                        !(
+                            (m.type === 'update' || m.type === 'cancel') &&
+                            m.id === shiftId
+                        ),
+                ),
                 {
                     type: 'update',
                     id: shiftId,

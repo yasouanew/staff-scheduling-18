@@ -4,6 +4,7 @@ namespace App\Http\Requests\Branch;
 
 use App\Http\Requests\Branch\Concerns\ValidatesBranchSchedule;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class UpdateBranchRequest extends FormRequest
 {
@@ -28,7 +29,19 @@ class UpdateBranchRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => ['sometimes', 'required', 'string', 'max:255'],
+            // The branch being edited is ignored so re-saving an unchanged name
+            // (or a case-only edit of it) is not treated as a duplicate. The
+            // company is taken from the existing branch rather than the payload,
+            // which the update endpoint never lets a client change.
+            'name' => [
+                'sometimes',
+                'required',
+                'string',
+                'max:255',
+                Rule::unique('branches', 'name')
+                    ->where(fn ($query) => $query->where('company_id', $this->route('branch')?->company_id))
+                    ->ignore($this->route('branch')?->getKey()),
+            ],
             'manager_id' => ['nullable', 'integer', 'exists:employees,id'],
             'phone' => ['nullable', 'string', 'max:50'],
             'address' => ['nullable', 'string', 'max:1000'],
@@ -47,7 +60,10 @@ class UpdateBranchRequest extends FormRequest
      */
     public function messages(): array
     {
-        return $this->scheduleMessages();
+        return [
+            ...$this->scheduleMessages(),
+            'name.unique' => 'A branch with this name already exists for this company.',
+        ];
     }
 }
 

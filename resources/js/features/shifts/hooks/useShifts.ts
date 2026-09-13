@@ -319,6 +319,40 @@ async function createShift(input: ShiftMutationInput): Promise<Shift> {
     return mapShift(response.data.data);
 }
 
+/** Input for creating a whole branch-day atomically via `POST /shifts/bulk`. */
+export interface BulkShiftMutationInput {
+    rosterId: string;
+    date: string;
+    shifts: ShiftMutationInput[];
+}
+
+function toBulkItem(values: ShiftMutationInput): Record<string, unknown> {
+    const payload = toPayload(values);
+    // `roster_id` / `date` live once at the top level for bulk; per-row copies
+    // are dropped so a stale row can never split the batch across weeks.
+    const { roster_id: _rosterId, date: _date, ...rest } = payload;
+    return rest;
+}
+
+async function createShiftsBulk(input: BulkShiftMutationInput): Promise<Shift[]> {
+    const response = await apiClient.post<ApiSuccessResponse<ShiftDto[] | PaginatedCollection<ShiftDto>>>(
+        '/shifts/bulk',
+        {
+            roster_id: Number(input.rosterId),
+            date: input.date,
+            shifts: input.shifts.map(toBulkItem),
+        },
+    );
+
+    const raw = response.data.data as ShiftDto[] | PaginatedCollection<ShiftDto> | { data: ShiftDto[] };
+    const list: ShiftDto[] = Array.isArray(raw)
+        ? raw
+        : Array.isArray((raw as { data?: ShiftDto[] }).data)
+            ? (raw as { data: ShiftDto[] }).data
+            : [];
+    return list.map(mapShift);
+}
+
 async function updateShift(id: string, input: ShiftMutationInput): Promise<Shift> {
     const response = await apiClient.put<ApiSuccessResponse<ShiftDto>>(`/shifts/${id}`, toPayload(input));
     return mapShift(response.data.data);
@@ -352,6 +386,19 @@ export function useCreateShift(): UseMutationResult<Shift, Error, ShiftMutationI
 
     return useMutation<Shift, Error, ShiftMutationInput>({
         mutationFn: createShift,
+        onSuccess: () => {
+            void queryClient.invalidateQueries({ queryKey: SHIFT_KEYS.all });
+            void queryClient.invalidateQueries({ queryKey: ['rosters'] });
+        },
+    });
+}
+
+/** Creates a whole branch-day atomically and refreshes schedule views. */
+export function useCreateShiftsBulk(): UseMutationResult<Shift[], Error, BulkShiftMutationInput> {
+    const queryClient = useQueryClient();
+
+    return useMutation<Shift[], Error, BulkShiftMutationInput>({
+        mutationFn: createShiftsBulk,
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: SHIFT_KEYS.all });
             void queryClient.invalidateQueries({ queryKey: ['rosters'] });

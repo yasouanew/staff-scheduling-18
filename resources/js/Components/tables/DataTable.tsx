@@ -30,7 +30,7 @@ import {
     Search,
     SlidersHorizontal,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 
@@ -43,6 +43,14 @@ interface DataTableProps<TData, TValue> {
     searchKey?: string;
     /** Placeholder text for the search input. */
     searchPlaceholder?: string;
+    /**
+     * Controlled search value. When provided alongside `onSearchChange`, the
+     * toolbar input becomes fully controlled so a parent can observe the query
+     * (for example, to recalculate stats) while the table still filters on it.
+     */
+    searchValue?: string;
+    /** Called on every search keystroke, only used with `searchValue`. */
+    onSearchChange?: (value: string) => void;
     /** Renders skeleton rows while data is being fetched. */
     isLoading?: boolean;
 }
@@ -62,6 +70,8 @@ export function DataTable<TData, TValue>({
     data,
     searchKey,
     searchPlaceholder = 'Search...',
+    searchValue,
+    onSearchChange,
     isLoading = false,
 }: DataTableProps<TData, TValue>): JSX.Element {
     const [sorting, setSorting] = useState<SortingState>([]);
@@ -86,8 +96,23 @@ export function DataTable<TData, TValue>({
     });
 
     const searchColumn = searchKey ? table.getColumn(searchKey) : undefined;
-    const searchValue = (searchColumn?.getFilterValue() as string | undefined) ?? '';
+    const isSearchControlled = searchValue !== undefined && onSearchChange !== undefined;
+    const effectiveSearchValue = isSearchControlled
+        ? searchValue
+        : (searchColumn?.getFilterValue() as string | undefined) ?? '';
     const visibleColumnCount = table.getVisibleLeafColumns().length || columns.length;
+
+    // When the search is controlled, keep the table's internal filter in lockstep
+    // with the value supplied by the parent (e.g. after clearing all filters).
+    useEffect(() => {
+        if (!isSearchControlled || !searchColumn) {
+            return;
+        }
+
+        if ((searchColumn.getFilterValue() as string | undefined) ?? '' !== effectiveSearchValue) {
+            searchColumn.setFilterValue(effectiveSearchValue);
+        }
+    }, [effectiveSearchValue, isSearchControlled, searchColumn]);
     const pageCount = table.getPageCount();
     const currentPage = table.getState().pagination.pageIndex + 1;
 
@@ -103,8 +128,14 @@ export function DataTable<TData, TValue>({
                         />
                         <input
                             type="text"
-                            value={searchValue}
-                            onChange={(event) => searchColumn.setFilterValue(event.target.value)}
+                            value={effectiveSearchValue}
+                            onChange={(event) => {
+                                const nextValue = event.target.value;
+                                // Keep the table's internal filter and the parent's
+                                // observed query in sync regardless of which side drives.
+                                searchColumn?.setFilterValue(nextValue);
+                                onSearchChange?.(nextValue);
+                            }}
                             placeholder={searchPlaceholder}
                             aria-label={searchPlaceholder}
                             className={cn(

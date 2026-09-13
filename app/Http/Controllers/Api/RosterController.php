@@ -161,10 +161,31 @@ class RosterController extends Controller
 
     /**
      * Remove the specified roster.
+     *
+     * Draft rosters are hard-deleted. Published rosters are never hard-deleted
+     * from this endpoint: all active shifts are moved to `cancelled` (kept
+     * visible with a red accent in the UI), a change entry is recorded per
+     * shift and every affected employee is notified. A cancelled shift can be
+     * reverted later by updating its status back to `scheduled` via the
+     * shifts endpoint or the roster changes apply endpoint.
      */
-    public function destroy(Roster $roster): JsonResponse
+    public function destroy(Request $request, Roster $roster): JsonResponse
     {
         $this->authorize('delete', $roster);
+
+        if ($roster->isPublished()) {
+            $summary = $this->changeService->cancelAll($roster, $request->user());
+
+            return $this->successResponse(
+                [
+                    'roster' => new RosterResource($roster->fresh()->load(['company', 'branch', 'publisher'])),
+                    'summary' => $summary,
+                ],
+                $summary['change_count'] > 0
+                    ? 'Published roster shifts were moved to cancelled and affected staff were notified.'
+                    : 'Roster was already fully cancelled. No shifts needed updating.',
+            );
+        }
 
         $this->rosterService->delete($roster);
 

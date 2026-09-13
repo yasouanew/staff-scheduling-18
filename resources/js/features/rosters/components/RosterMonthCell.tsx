@@ -14,8 +14,10 @@ const MAX_VISIBLE_CHIPS = 3;
 interface RosterMonthCellProps {
     day: CalendarDay;
     /**
-     * `branches` aggregates the day to one chip per branch (month view), while
-     * `shifts` renders each shift individually (week/day views).
+     * `branches` aggregates the day to one chip per branch, which is what the
+     * month, week and day views all use so they share the roster drill-down,
+     * branch-day editor and `+N more` list. `shifts` renders each shift
+     * individually for callers that want a raw listing.
      */
     contentMode: CellContentMode;
     /**
@@ -135,7 +137,7 @@ export function RosterMonthCell({
                 }
             }}
             className={cn(
-                'group/cell relative flex min-h-28 flex-col gap-1 border-b border-r border-border p-1.5 transition-colors',
+                'group/cell relative flex min-h-28 flex-col gap-1 border-b border-r border-border p-1.5 transition-colors max-md:min-h-0 max-md:border-0 max-md:p-0',
                 // Padded days from the adjacent month recede so the focused month reads first.
                 day.isCurrentPeriod ? 'bg-card' : 'bg-muted/30',
                 day.isWeekend && day.isCurrentPeriod && 'bg-secondary/30',
@@ -187,9 +189,9 @@ export function RosterMonthCell({
                 ) : null}
             </div>
 
-            {/* Cell actions, revealed on hover but always keyboard reachable. */}
-            <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cell:opacity-100">
-                <div className="flex items-center gap-0.5 rounded-md bg-card/95 p-0.5 shadow-sm">
+            {/* Cell actions: hover-reveal on desktop, always visible on touch (no hover). */}
+            <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cell:opacity-100 max-md:opacity-100">
+                <div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-card/95 p-0.5 shadow-sm max-md:border-border max-md:shadow">
                     <button
                         type="button"
                         onClick={(event) => {

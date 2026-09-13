@@ -36,20 +36,31 @@ export function formatShiftTimeRange(startTime: string, endTime: string): string
     return `${startTime}–${endTime}`;
 }
 
-/** Produces the compact summary cards displayed at the top of the page. */
+/**
+ * Produces the compact summary cards displayed at the top of the page.
+ *
+ * The rows passed in are already the rows the operator is looking at, so no
+ * status is filtered out here — a cancelled shift disappears from the cards
+ * only when the status filter selects something that excludes it. Hard-coding
+ * an exclusion would double-filter and desync the cards from the table.
+ */
 export function deriveShiftStats(shifts: readonly Shift[]): ShiftStats {
     return shifts.reduce<ShiftStats>(
         (stats, shift) => {
             const duration = timeToMinutes(shift.endTime) - timeToMinutes(shift.startTime);
+            // Paid breaks are not deducted from payable hours; only unpaid breaks are.
+            const unpaidBreakMinutes = shift.isPaidBreak ? 0 : Math.max(0, shift.breakMinutes);
+            const paidDuration = Math.max(0, duration - unpaidBreakMinutes);
 
             return {
                 total: stats.total + 1,
                 open: stats.open + (shift.employeeId ? 0 : 1),
                 assigned: stats.assigned + (shift.employeeId ? 1 : 0),
                 totalHours: stats.totalHours + (duration > 0 ? duration / 60 : 0),
+                paidHours: stats.paidHours + (paidDuration > 0 ? paidDuration / 60 : 0),
             };
         },
-        { total: 0, open: 0, assigned: 0, totalHours: 0 },
+        { total: 0, open: 0, assigned: 0, totalHours: 0, paidHours: 0 },
     );
 }
 

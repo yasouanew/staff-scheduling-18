@@ -1,4 +1,4 @@
-import { CalendarOff, Clock, UserRound, UserRoundX } from 'lucide-react';
+import { CalendarOff, Clock, RotateCcw, UserRound, UserRoundX } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { ROSTER_SHIFT_STATUS_LABELS, type RosterShift } from '@/types/roster-management';
@@ -35,12 +35,14 @@ const SHIFT_ACCENTS: Record<RosterShift['status'], string> = {
 /** Single shift card inside a day column. */
 function ShiftCard({ shift }: { shift: RosterShift }): JSX.Element {
     const isOpen = !shift.employeeId;
+    const isCancelled = shift.status === 'cancelled';
 
     return (
         <li
             className={cn(
                 'rounded-lg border border-border border-l-4 bg-background p-3 shadow-sm transition-colors hover:bg-accent/40',
-                SHIFT_ACCENTS[shift.status],
+                isCancelled ? 'border-l-danger' : SHIFT_ACCENTS[shift.status],
+                isCancelled && 'bg-muted/60',
             )}
         >
             <div className="flex items-center gap-1.5 text-sm font-medium text-foreground">
@@ -73,6 +75,12 @@ function ShiftCard({ shift }: { shift: RosterShift }): JSX.Element {
                     {formatHours(shiftPayableMinutes(shift))}
                 </span>
             </div>
+            {isCancelled && (
+                <p className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-danger">
+                    <RotateCcw className="h-3 w-3 shrink-0" aria-hidden="true" />
+                    Cancelled — reopen from the matrix view to revert
+                </p>
+            )}
         </li>
     );
 }

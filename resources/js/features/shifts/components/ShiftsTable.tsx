@@ -14,6 +14,10 @@ import { ShiftStatusBadge } from './ShiftStatusBadge';
 interface ShiftsTableProps {
     shifts: Shift[];
     isLoading?: boolean;
+    /** Controlled search query so the parent can observe it for live stats. */
+    searchValue?: string;
+    /** Called on every search keystroke. */
+    onSearchChange?: (value: string) => void;
     onEdit: (shift: Shift) => void;
     onAssign: (shift: Shift) => void;
     onDelete: (shift: Shift) => void;
@@ -159,6 +163,8 @@ function ShiftActions({
 export function ShiftsTable({
     shifts,
     isLoading = false,
+    searchValue,
+    onSearchChange,
     onEdit,
     onAssign,
     onDelete,
@@ -255,6 +261,8 @@ export function ShiftsTable({
             isLoading={isLoading}
             searchKey="employee"
             searchPlaceholder="Search employee, position or branch..."
+            searchValue={searchValue}
+            onSearchChange={onSearchChange}
         />
     );
 }

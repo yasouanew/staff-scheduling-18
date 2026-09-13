@@ -17,11 +17,11 @@ use Illuminate\Support\Collection;
  *
  *     Business → Active Subscription → Plan → Features
  *
- * and, for branch-scoped features, additionally requires an active branch
- * subscription for the specific branch. All decision rules (trial, active,
- * past due, cancelled, expired, no subscription) live here so controllers,
- * services, policies, middleware and jobs never hard-code plan names or
- * feature strings.
+ * Entitlements are company-scoped: branches are an organisational dimension of
+ * the business and no longer carry their own subscription. All decision rules
+ * (trial, active, past due, cancelled, expired, no subscription) live here so
+ * controllers, services, policies, middleware and jobs never hard-code plan
+ * names or feature strings.
  */
 class EntitlementService
 {
@@ -50,9 +50,10 @@ class EntitlementService
     /**
      * Whether the given business currently grants access to a feature.
      *
-     * When a branch is provided and the feature is branch-scoped, the branch
-     * must also carry an active (paid) branch subscription — otherwise the
-     * feature is considered unavailable for that branch.
+     * Entitlements are company-scoped: the decision is made purely from the
+     * business's entitled plan. The `$branch` parameter is retained for
+     * signature compatibility with existing callers and is accepted-and-ignored
+     * (no branch-scoped entitlement exists any more).
      */
     public function allows(Company $company, Feature $feature, ?Branch $branch = null): bool
     {
@@ -60,17 +61,7 @@ class EntitlementService
             return false;
         }
 
-        $enabled = $this->enabledFeatureKeys($company)->contains($feature->value);
-
-        if (! $enabled) {
-            return false;
-        }
-
-        if ($feature->isBranchScoped()) {
-            return $branch !== null && $this->branchIsEntitled($branch);
-        }
-
-        return true;
+        return $this->enabledFeatureKeys($company)->contains($feature->value);
     }
 
     /**
@@ -130,7 +121,19 @@ class EntitlementService
      */
     public function entitledPlan(Company $company): ?Plan
     {
-        return $this->entitledSubscription($company)?->plan;
+        $plan = $this->entitledSubscription($company)?->plan;
+
+        if ($plan !== null) {
+            return $plan;
+        }
+
+        // Fallback: check if the company has a latest subscription of any status
+        return $company->subscriptions()
+            ->with('plan')
+            ->latest('starts_at')
+            ->latest('id')
+            ->first()
+            ?->plan;
     }
 
     /**
@@ -197,36 +200,15 @@ class EntitlementService
     }
 
     /**
-     * Whether a specific branch currently has an active (entitled) branch
-     * subscription, i.e. a branch that has been paid for.
-     */
-    public function branchIsEntitled(Branch $branch): bool
-    {
-        return $branch->branchSubscriptions()
-            ->entitled()
-            ->where(function ($query): void {
-                $query->whereNull('ended_at')->orWhere('ended_at', '>', now());
-            })
-            ->exists();
-    }
-
-    /**
-     * The employee capacity granted to a branch, if any.
+     * The employee capacity granted to a branch.
      *
-     * Prefers the branch subscription's own capacity and falls back to the
-     * plan's max_employees when the branch subscription has none set.
+     * Capacity is company-scoped: every branch of the business shares the
+     * entitled plan's `max_employees`. Returns null when the branch has no
+     * company or the company has no entitled subscription (meaning unlimited /
+     * unenforced).
      */
     public function branchEmployeeCapacity(Branch $branch): ?int
     {
-        $branchSubscription = $branch->branchSubscriptions()
-            ->entitled()
-            ->latest('started_at')
-            ->first();
-
-        if ($branchSubscription && $branchSubscription->employee_capacity !== null) {
-            return (int) $branchSubscription->employee_capacity;
-        }
-
         $subscription = $branch->company
             ? $this->entitledSubscription($branch->company)
             : null;

@@ -123,6 +123,48 @@ class RosterChangeService
     }
 
     /**
+     * Cancel every active shift on a published roster (bulk trash).
+     *
+     * Used when the manager clicks the roster trash icon on a published week:
+     * instead of hard-deleting the roster, every non-cancelled shift is
+     * soft-cancelled (stays visible with a red accent), one `roster_changes`
+     * row is recorded per shift, each affected employee gets ONE grouped
+     * notification, and the optimistic-lock version is bumped.
+     *
+     * Reuses {@see apply()} so preview/audit/notification semantics stay
+     * identical to single-shift cancels. Already-cancelled shifts are skipped
+     * so the operation is idempotent. Reverting later is just an `update`
+     * mutation with `status: scheduled` (or a direct `PUT /shifts/{id}`).
+     *
+     * @return array<string, mixed> Same shape as {@see apply()}.
+     */
+    public function cancelAll(Roster $roster, User $performer): array
+    {
+        $shiftIds = $roster->shifts()
+            ->where('status', '!=', 'cancelled')
+            ->pluck('id')
+            ->all();
+
+        if (empty($shiftIds)) {
+            return [
+                'roster_id' => $roster->id,
+                'version' => (int) $roster->version,
+                'affected_employee_count' => 0,
+                'change_count' => 0,
+                'changes' => [],
+                'employees' => [],
+            ];
+        }
+
+        $mutations = array_map(
+            fn ($id) => ['type' => 'cancel', 'id' => (int) $id],
+            $shiftIds,
+        );
+
+        return $this->apply($roster, $mutations, $performer, null);
+    }
+
+    /**
      * Apply a set of mutations to a published roster inside a single
      * transaction, record every change, notify affected employees (grouped)
      * and bump the optimistic-lock version.

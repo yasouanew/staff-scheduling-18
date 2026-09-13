@@ -125,15 +125,19 @@ export function deriveWorkingShifts(
             }
 
             case 'cancel': {
-                const index = working.findIndex((entry) => entry.id === mutation.id);
-                if (index === -1) {
+                const shift = working.find((entry) => entry.id === mutation.id);
+                if (!shift) {
                     break;
                 }
-                // Cancelling removes the shift from the roster: a just-added
-                // temp shift nets out to "never add it", and a persisted shift
-                // is dropped from the working set (the backend hard-deletes it
-                // on apply, keeping only the audit + notification trail).
-                working.splice(index, 1);
+                // Temp shifts net out entirely (never saved). Persisted shifts
+                // stay visible as cancelled (red left border) — the backend
+                // soft-cancels them, records audit + grouped notification.
+                if (isTempShiftId(shift.id)) {
+                    const index = working.findIndex((entry) => entry.id === mutation.id);
+                    working.splice(index, 1);
+                    break;
+                }
+                shift.status = 'cancelled';
                 break;
             }
 
@@ -187,7 +191,11 @@ function applyShiftValues(shift: RosterShift, values: Record<string, unknown>): 
         const status = values.status as string;
         if (status === 'cancelled') {
             shift.status = 'cancelled';
+        } else if (status === 'completed') {
+            shift.status = 'completed';
         } else if (shift.employeeId !== null) {
+            // Reverting a cancelled shift (or any status edit) lands back on
+            // `scheduled`; open rows keep the presentation-only `open` status.
             shift.status = 'scheduled';
         }
     }

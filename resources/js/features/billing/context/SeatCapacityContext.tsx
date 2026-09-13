@@ -2,7 +2,7 @@ import { createContext, useContext, useMemo, type PropsWithChildren } from 'reac
 
 import { normalizeWebRole, useWebSession } from '@/features/auth/hooks/useWebSession';
 
-import { useUsageOverview } from '../hooks/useSubscription';
+import { useSubscriptionSummary, useUsageOverview } from '../hooks/useSubscription';
 
 /**
  * Active-user seat capacity context.

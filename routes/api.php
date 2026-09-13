@@ -2,7 +2,6 @@
 
 use App\Http\Controllers\Api\Auth\AuthController;
 use App\Http\Controllers\Api\BranchController;
-use App\Http\Controllers\Api\BranchSubscriptionController;
 use App\Http\Controllers\Api\CompanyController;
 use App\Http\Controllers\Api\CompanySettingController;
 use App\Http\Controllers\Api\DashboardController;
@@ -261,17 +260,9 @@ Route::prefix('v1')->group(function () {
             // Branch management
             Route::apiResource('branches', BranchController::class);
 
-            // Branch subscription lifecycle + capacity (see BranchSubscriptionController).
-            // Operational branch actions stay separate from billing; capacity is a
-            // local entitlement limit (not billable) so it lives in this domain.
-            Route::post('branches/{branch}/activate', [BranchSubscriptionController::class, 'activate'])
-                ->name('api.branches.activate');
-            Route::post('branches/{branch}/deactivate', [BranchSubscriptionController::class, 'deactivate'])
-                ->name('api.branches.deactivate');
-            Route::put('branches/{branch}/capacity', [BranchSubscriptionController::class, 'updateCapacity'])
-                ->name('api.branches.capacity');
-            Route::get('usage', [BranchSubscriptionController::class, 'usage'])
-                ->name('api.usage');
+            // Branch lifecycle (activate / deactivate) and per-branch capacity are no
+            // longer separate endpoints: subscriptions are company-scoped, so branch
+            // counting is reported through the plan subscription usage endpoint.
 
             // Department management
             Route::apiResource('departments', DepartmentController::class);
@@ -337,7 +328,9 @@ Route::prefix('v1')->group(function () {
 
             Route::apiResource('rosters', RosterController::class);
 
-            // Shift management (CRUD + assign employee)
+            // Shift management (CRUD + bulk branch-day create + assign employee)
+            Route::post('shifts/bulk', [ShiftController::class, 'storeBulk'])
+                ->name('api.shifts.bulk');
             Route::post('shifts/{shift}/assign-employee', [ShiftController::class, 'assignEmployee'])
                 ->name('api.shifts.assign-employee');
             Route::apiResource('shifts', ShiftController::class);
